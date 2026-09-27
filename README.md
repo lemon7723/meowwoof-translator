@@ -21,7 +21,7 @@
 ├── pubspec.yaml                                   # 版本 1.0.0+1
 ├── README.md
 ├── .github/workflows/build-apk.yml                # 云端打包（自动下载 Vosk 模型）
-├── assets/sounds/*.wav                            # 20 条合成叫声（已提交，无需 CI 下载）
+├── assets/sounds/*.wav                            # 20 条真实叫声（Mixkit 素材组装，已提交）
 ├── lib/
 │   ├── main.dart                                  # 三页 UI（翻译/叫声库/我的毛孩）
 │   ├── data/call_library.dart                     # 10 意图定义（触发词/拟声/用途说明）
@@ -39,8 +39,15 @@
         ├── build.gradle                           # Vosk 0.3.47 + JNA（Maven Central）
         └── src/main/
             ├── AndroidManifest.xml                # 仅 RECORD_AUDIO 权限，纯离线
-            └── kotlin/com/meowwoof/translator/MainActivity.kt   # BUILD_TAG = v1.0.0
+            └── kotlin/com/meowwoof/translator/MainActivity.kt   # BUILD_TAG = v1.0.2
 ```
+
+## 叫声素材来源与许可
+
+- 预设叫声基于 [Mixkit](https://mixkit.co) 真实动物录音组装（剪接 / 变速 / 混音），
+  适用 Mixkit Sound Effects Free License（免费商用、无需署名）
+- 组装脚本：`tools/fetch_sfx.py`（下载素材）+ `tools/build_real_calls.py`（按配方组装），可复现
+- 原始素材不进仓库（`_sfx_raw/` 已忽略），由脚本按 id 重新拉取
 
 ## ⚠️ Vosk 中文模型（42MB）不进仓库
 

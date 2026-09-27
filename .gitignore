@@ -30,3 +30,6 @@ android/app/src/main/assets/model-cn/
 .flutter_tool_state
 flutter_*.log
 android/app/src/main/java/io/flutter/plugins/
+
+# Mixkit 素材缓存（脚本可重新拉取）
+_sfx_raw/
