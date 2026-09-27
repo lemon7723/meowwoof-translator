@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.loader.FlutterInjector
 import io.flutter.plugin.common.MethodChannel
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -41,7 +42,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.0.0"
+        private const val BUILD_TAG = "v1.0.1"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120
@@ -408,6 +409,23 @@ class MainActivity : FlutterActivity() {
 
     // ================= 叫声播放 =================
 
+    /**
+     * 打开 Flutter 资源。Dart 侧资源键是 "assets/sounds/xx.wav"，
+     * 但在 APK 内实际位于 flutter_assets/ 前缀之下，
+     * 必须用 FlutterLoader.getLookupKeyForAsset 换算，不能用裸路径直接 open。
+     */
+    private fun openFlutterAsset(asset: String): java.io.InputStream? {
+        return try {
+            val key = FlutterInjector.instance().flutterLoader()
+                .getLookupKeyForAsset(asset)
+            android.util.Log.d(TAG, "openFlutterAsset: $asset -> $key")
+            assets.open(key)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "openFlutterAsset failed: $asset, ${e.message}")
+            null
+        }
+    }
+
     private fun stopPlaying() {
         try {
             player?.stop()
@@ -431,12 +449,19 @@ class MainActivity : FlutterActivity() {
                         // 绝对路径（宠物录音回放）直接用
                         File(assetOrPath)
                     } else {
-                        // assets 不能直接给 MediaPlayer，先落到 cacheDir（幂等）
+                        // Flutter 资源不能直接给 MediaPlayer，先落到 cacheDir（幂等）
                         val target = File(cacheDir, assetOrPath.replace("/", "_"))
                         if (!target.exists() || target.length() == 0L) {
-                            assets.open(assetOrPath).use { input ->
-                                FileOutputStream(target).use { input.copyTo(it) }
+                            val input = openFlutterAsset(assetOrPath)
+                            if (input == null) {
+                                mainHandler.post {
+                                    result.error(
+                                        "PLAY_FAIL",
+                                        "找不到叫声资源：$assetOrPath（APK 内资源缺失？）", null)
+                                }
+                                return@execute
                             }
+                            input.use { ins -> FileOutputStream(target).use { ins.copyTo(it) } }
                         }
                         target
                     }
@@ -466,8 +491,10 @@ class MainActivity : FlutterActivity() {
                 }
                 player = mp
                 mp.start()
+                android.util.Log.d(TAG, "playCall OK: $assetOrPath dur=${dur}ms rate=$rate")
                 mainHandler.post { result.success(mapOf("durationMs" to dur)) }
             } catch (e: Exception) {
+                android.util.Log.e(TAG, "playCall failed: ${e.message}")
                 mainHandler.post { result.error("PLAY_FAIL", "播放失败：${e.message}", null) }
             }
         }
