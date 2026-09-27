@@ -34,7 +34,7 @@ import kotlin.math.sqrt
  *    - Recognizer 带词表语法（grammar），只识别毛语通意图词表，小模型识别更准
  *    - SpeechService 持续收音，partial/final 结果经 MethodChannel 回传 Dart
  * 2. 录宠物声音：AudioRecord 16kHz 单声道 PCM，停止后写 WAV 并做自相关音高分析
- * 3. 叫声播放：MediaPlayer 播放 assets/sounds/*.wav（先拷到 cacheDir），
+ * 3. 叫声播放：MediaPlayer 播放 assets/sounds 目录内的 wav（先拷到 cacheDir），
  *    用 PlaybackParams.speed 做音色匹配（整体变速变调，类似磁带转速）
  */
 class MainActivity : FlutterActivity() {
