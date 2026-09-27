@@ -1,0 +1,108 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+
+      # 仓库只提交自定义代码，缺 gradle wrapper / res 图标等壳文件，
+      # 先 flutter create 补壳（会覆盖自定义文件 → 先备份后恢复）。
+      - name: 备份自定义原生代码（防 flutter create 覆盖）
+        run: |
+          mkdir -p /tmp/mw_backup
+          cp "android/app/src/main/kotlin/com/meowwoof/translator/MainActivity.kt" /tmp/mw_backup/MainActivity.kt
+          cp "android/app/build.gradle" /tmp/mw_backup/build.gradle
+          cp "android/app/src/main/AndroidManifest.xml" /tmp/mw_backup/AndroidManifest.xml
+          cp "pubspec.yaml" /tmp/mw_backup/pubspec.yaml
+          cp "android/settings.gradle" /tmp/mw_backup/settings.gradle
+          cp "android/build.gradle" /tmp/mw_backup/root-build.gradle
+          cp "android/gradle.properties" /tmp/mw_backup/gradle.properties
+          cp "lib/main.dart" /tmp/mw_backup/main.dart
+
+      - name: 生成缺失的工程壳文件（gradlew / res 图标 / wrapper）
+        run: flutter create . --org com.meowwoof --project-name meowwoof_translator --platforms android
+
+      - name: 恢复自定义原生代码（保留语音识别与依赖配置）
+        run: |
+          cp /tmp/mw_backup/MainActivity.kt "android/app/src/main/kotlin/com/meowwoof/translator/MainActivity.kt"
+          cp /tmp/mw_backup/build.gradle "android/app/build.gradle"
+          cp /tmp/mw_backup/AndroidManifest.xml "android/app/src/main/AndroidManifest.xml"
+          cp /tmp/mw_backup/pubspec.yaml "pubspec.yaml"
+          cp /tmp/mw_backup/settings.gradle "android/settings.gradle"
+          cp /tmp/mw_backup/root-build.gradle "android/build.gradle"
+          cp /tmp/mw_backup/gradle.properties "android/gradle.properties"
+          cp /tmp/mw_backup/main.dart "lib/main.dart"
+          # flutter create 若生成了引用 MyApp 模板的测试，删掉（自己的测试保留）
+          rm -f test/widget_test.dart
+
+      # 关键保险：确认恢复成功，避免打包出计数器 Demo 或丢依赖
+      - name: 校验自定义代码已正确恢复
+        run: |
+          grep -q "meowwoof/voice" "android/app/src/main/kotlin/com/meowwoof/translator/MainActivity.kt" || { echo "❌ MainActivity.kt 未被正确恢复"; exit 1; }
+          grep -q "vosk-android" "android/app/build.gradle" || { echo "❌ build.gradle 未被正确恢复，Vosk 依赖缺失"; exit 1; }
+          grep -q "RECORD_AUDIO" "android/app/src/main/AndroidManifest.xml" || { echo "❌ AndroidManifest.xml 未被正确恢复，缺麦克风权限"; exit 1; }
+          echo "✅ 自定义代码校验通过"
+
+      # 中文小模型 42MB 不进仓库（GitHub 上传限制），CI 现拉并打入 APK；
+      # 手机端仍为纯离线、无网络权限。
+      - name: 下载 Vosk 中文小模型（42MB）
+        run: |
+          mkdir -p android/app/src/main/assets/model-cn
+          if [ ! -f "android/app/src/main/assets/model-cn/am/final.mdl" ]; then
+            echo "下载 vosk-model-small-cn-0.22..."
+            curl -fsSL -o /tmp/vosk-cn.zip \
+              "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip"
+            unzip -q /tmp/vosk-cn.zip -d /tmp/vosk-cn
+            cp -r /tmp/vosk-cn/vosk-model-small-cn-0.22/* android/app/src/main/assets/model-cn/
+          fi
+          echo "模型就位："
+          ls android/app/src/main/assets/model-cn/
+          SIZE=$(du -sb android/app/src/main/assets/model-cn | cut -f1)
+          echo "模型目录大小: ${SIZE} 字节"
+          if [ "$SIZE" -lt 30000000 ]; then
+            echo "❌ 模型体积异常（<30MB），可能下载到错误页，请检查网络"; exit 1
+          fi
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: Dart 静态自检（error 级问题阻断打包）
+        run: |
+          flutter analyze --no-pub 2>&1 | tee /tmp/analyze.log || true
+          if grep -q "error •" /tmp/analyze.log; then
+            echo "❌ 存在 Dart 编译错误："
+            grep "error •" /tmp/analyze.log
+            exit 1
+          fi
+          echo "✅ 无 Dart error 级问题"
+
+      - name: 单元测试
+        run: flutter test
+
+      - name: 打包 APK
+        run: flutter build apk --release
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: meowwoof-apk
+          path: build/app/outputs/flutter-apk/app-release.apk

@@ -1,0 +1,50 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.meowwoof.translator"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    defaultConfig {
+        applicationId = "com.meowwoof.translator"
+        // Vosk 需要 21+；image_picker / audioplayers 与 24 兼容
+        minSdk = 24
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        multiDexEnabled = true
+    }
+
+    buildTypes {
+        release {
+            // 纯离线 App：debug 签名即可侧载；上架前替换为自己的 release 签名
+            signingConfig = signingConfigs.debug
+            minifyEnabled = false
+            shrinkResources = false
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    // 离线语音识别（Vosk 官方 Android 库，Maven Central）
+    // 与官方 demo 相同的 jna@aar 写法；两者均无 Google 服务依赖
+    implementation "com.alphacephei:vosk-android:0.3.47@aar"
+    implementation "net.java.dev.jna:jna:5.13.0@aar"
+}

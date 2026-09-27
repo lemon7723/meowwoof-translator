@@ -1,0 +1,90 @@
+/// 毛语通 · 宠物资料与设置持久化（SharedPreferences + JSON）
+library;
+
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class PetProfile {
+  String name;
+  String species; // 'cat' | 'dog'
+  String? photoPath;
+  double pitchHz; // 录音分析出的基频，0 = 未录制
+
+  PetProfile({
+    this.name = '毛孩',
+    this.species = 'cat',
+    this.photoPath,
+    this.pitchHz = 0,
+  });
+
+  bool get hasVoicePrint => pitchHz > 0;
+
+  /// 音色匹配档位：以人声男低音 ~110Hz 为锚点 1.0，
+  /// 宠物基频越高播放越快（音调越高）、越低播放越慢（音调越低）。
+  /// 上限 1.3 / 下限 0.75，避免过度失真。
+  double get playbackRate {
+    if (pitchHz <= 0) return species == 'cat' ? 1.15 : 0.95;
+    final ratio = pitchHz / 110.0;
+    final rate = 1.0 + (math.log(ratio) / math.ln2) * 0.22;
+    return rate.clamp(0.75, 1.30).toDouble();
+  }
+
+  Map<String, Object?> toMap() => {
+        'name': name,
+        'species': species,
+        'photoPath': photoPath,
+        'pitchHz': pitchHz,
+      };
+
+  static PetProfile fromMap(Map<Object?, Object?> m) => PetProfile(
+        name: (m['name'] as String?) ?? '毛孩',
+        species: (m['species'] as String?) ?? 'cat',
+        photoPath: m['photoPath'] as String?,
+        pitchHz: (m['pitchHz'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class ProfileStore {
+  static const _key = 'pet_profile_v1';
+  static PetProfile? _cache;
+
+  static Future<PetProfile> load() async {
+    if (_cache != null) return _cache!;
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_key);
+    if (raw == null || raw.isEmpty) {
+      _cache = PetProfile();
+      return _cache!;
+    }
+    try {
+      final obj = jsonDecode(raw);
+      _cache = PetProfile.fromMap(obj is Map ? obj.cast<Object?, Object?>() : {});
+    } catch (_) {
+      _cache = PetProfile();
+    }
+    return _cache!;
+  }
+
+  static Future<void> save(PetProfile p) async {
+    _cache = p;
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_key, jsonEncode(p.toMap()));
+  }
+
+  /// 拷贝头像到应用文档目录（相册临时文件可能被系统回收）
+  static Future<String?> importPhoto(String srcPath) async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dst = File(
+          '${docs.path}/pet_photo_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await File(srcPath).copy(dst.path);
+      return dst.path;
+    } catch (_) {
+      return null;
+    }
+  }
+}
