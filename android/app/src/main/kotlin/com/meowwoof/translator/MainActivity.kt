@@ -12,7 +12,6 @@ import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.embedding.engine.loader.FlutterInjector
 import io.flutter.plugin.common.MethodChannel
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -411,19 +410,20 @@ class MainActivity : FlutterActivity() {
 
     /**
      * 打开 Flutter 资源。Dart 侧资源键是 "assets/sounds/xx.wav"，
-     * 但在 APK 内实际位于 flutter_assets/ 前缀之下，
-     * 必须用 FlutterLoader.getLookupKeyForAsset 换算，不能用裸路径直接 open。
+     * 但在 APK 内实际位于 flutter_assets/ 前缀之下。
+     * 先试标准前缀，再回退裸路径（兼容不同打包形态）。
      */
     private fun openFlutterAsset(asset: String): java.io.InputStream? {
-        return try {
-            val key = FlutterInjector.instance().flutterLoader()
-                .getLookupKeyForAsset(asset)
-            android.util.Log.d(TAG, "openFlutterAsset: $asset -> $key")
-            assets.open(key)
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "openFlutterAsset failed: $asset, ${e.message}")
-            null
+        for (key in listOf("flutter_assets/$asset", asset)) {
+            try {
+                val s = assets.open(key)
+                android.util.Log.d(TAG, "openFlutterAsset: $asset -> $key")
+                return s
+            } catch (_: Exception) {
+            }
         }
+        android.util.Log.e(TAG, "openFlutterAsset failed: $asset")
+        return null
     }
 
     private fun stopPlaying() {
