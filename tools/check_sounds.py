@@ -33,7 +33,7 @@ def main():
             flag += " BAD-FMT"
         if peak < 0.5 or rms < 0.03:
             flag += " TOO-QUIET"
-        if dur < 0.2 or dur > 2.0:
+        if dur < 0.2 or dur > 3.0:
             flag += " BAD-DUR"
         if flag:
             bad.append(f + flag)

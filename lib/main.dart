@@ -9,6 +9,8 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -253,7 +255,10 @@ class _TranslatePageState extends State<TranslatePage>
     }
     final idx = indexOfIntent(intentId);
     if (idx < 0) return;
-    final asset = callAsset(widget.pet.species, intentId, idx);
+    // 随机变体：同一意图多条录音轮换，避免"来来去去一个声"
+    final n = variantCount(widget.pet.species, intentId);
+    final v = n > 1 ? Random().nextInt(n) : 0;
+    final asset = callAsset(widget.pet.species, intentId, idx, variant: v);
     try {
       final info = await VoiceBridge.playCall(asset, widget.pet.playbackRate);
       final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
@@ -264,11 +269,26 @@ class _TranslatePageState extends State<TranslatePage>
           Timer(Duration(milliseconds: durMs.toInt() + 300), () {
         if (mounted) setState(() => _playing = false);
       });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('播放失败：$e')),
-        );
+    } catch (_) {
+      // 变体缺失时回退主文件
+      try {
+        final info = await VoiceBridge.playCall(
+            callAsset(widget.pet.species, intentId, idx),
+            widget.pet.playbackRate);
+        final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
+            widget.pet.playbackRate;
+        setState(() => _playing = true);
+        _playingTimer?.cancel();
+        _playingTimer =
+            Timer(Duration(milliseconds: durMs.toInt() + 300), () {
+          if (mounted) setState(() => _playing = false);
+        });
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('播放失败：$e')),
+          );
+        }
       }
     }
   }
@@ -530,9 +550,13 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
       return;
     }
     setState(() => _playingId = it.id);
+    // 随机变体轮换
+    final n = variantCount(_species, it.id);
+    final v = n > 1 ? Random().nextInt(n) : 0;
+    final asset = callAsset(_species, it.id, idx, variant: v);
     try {
-      final info = await VoiceBridge.playCall(
-          callAsset(_species, it.id, idx), widget.pet.playbackRate);
+      final info =
+          await VoiceBridge.playCall(asset, widget.pet.playbackRate);
       final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
           widget.pet.playbackRate;
       Future.delayed(Duration(milliseconds: durMs.toInt() + 300), () {
@@ -540,12 +564,27 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
           setState(() => _playingId = null);
         }
       });
-    } catch (e) {
-      if (mounted) setState(() => _playingId = null);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('播放失败：$e')),
-        );
+    } catch (_) {
+      // 变体缺失回退主文件
+      try {
+        final info = await VoiceBridge.playCall(
+            callAsset(_species, it.id, idx), widget.pet.playbackRate);
+        final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
+            widget.pet.playbackRate;
+        Future.delayed(Duration(milliseconds: durMs.toInt() + 300), () {
+          if (mounted && _playingId == it.id) {
+            setState(() => _playingId = null);
+          }
+        });
+        return;
+      } catch (e) {
+        if (mounted) setState(() => _playingId = null);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('播放失败：$e')),
+          );
+        }
+        return;
       }
     }
   }
@@ -564,8 +603,8 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                     style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 4),
                 Text(
-                  '同一个意思、永远同一个声音，配合奖励反复使用，'
-                  '它就会把这些声音当成"信号"记住。',
+                  '每个意思配多条真实录音轮换播放，同一个意思、永远是同类声音——'
+                  '配合奖励反复使用，它就会把这些声音当成"信号"记住。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -580,7 +619,8 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                         Expanded(
                           child: Text(
                             '诚实说明：猫狗没有人类式语言，这不是"真翻译"；'
-                            '是一套一致的声音信号 + 条件反射训练法。',
+                            '是基于行为学研究的固定声音信号 + 条件反射训练法。'
+                            '素材源自 Wikimedia Commons（见 NOTICE）。',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
@@ -905,8 +945,8 @@ class _PetPageState extends State<PetPage> {
           Center(
             child: Text(
               _nativeVersion.isEmpty
-                  ? '毛语通 1.0.0'
-                  : '毛语通 1.0.0 · 原生端 $_nativeVersion',
+                  ? '毛语通 1.1.0'
+                  : '毛语通 1.1.0 · 原生端 $_nativeVersion',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
