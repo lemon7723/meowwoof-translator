@@ -35,3 +35,5 @@ android/app/src/main/java/io/flutter/plugins/
 _sfx_raw/
 
 _sfx_raw2/
+
+_sfx_raw3/*.mp3
