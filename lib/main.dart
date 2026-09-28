@@ -459,19 +459,8 @@ class _TranslatePageState extends State<TranslatePage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text('不方便说话？直接点场景播放',
-                  style: Theme.of(context).textTheme.titleSmall),
-            ),
-            TextButton.icon(
-              onPressed: _openDrawer,
-              icon: const Icon(Icons.grid_view, size: 18),
-              label: const Text('全部场景'),
-            ),
-          ],
-        ),
+        Text('不方便说话？直接点场景播放',
+            style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 8),
         SizedBox(
           height: 118,
@@ -513,7 +502,7 @@ class _TranslatePageState extends State<TranslatePage>
                     ),
                     const Spacer(),
                     if (widget.pet.pinnedIds.contains(it.id))
-                      Icon(Icons.push_pin, size: 13, color: cs.outline),
+                      Icon(Icons.push_pin, size: 16, color: cs.primary),
                   ],
                 ),
                 const Spacer(),
@@ -542,46 +531,6 @@ class _TranslatePageState extends State<TranslatePage>
         ),
       ),
     );
-  }
-
-  Future<void> _openDrawer() async {
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text('全部场景',
-                  style: Theme.of(context).textTheme.titleMedium),
-            ),
-            for (final it in kIntents)
-              ListTile(
-                leading: CircleAvatar(
-                  radius: 14,
-                  child: Text('${indexOfIntent(it.id) + 1}',
-                      style: const TextStyle(fontSize: 12)),
-                ),
-                title: Text(it.name),
-                subtitle: Text(
-                  it.phonetic(widget.pet.species),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: kSeed),
-                ),
-                trailing: widget.pet.pinnedIds.contains(it.id)
-                    ? const Icon(Icons.push_pin, size: 18)
-                    : null,
-                onTap: () => Navigator.pop(context, it.id),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (picked != null) _play(picked);
   }
 }
 
@@ -657,14 +606,22 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
       return;
     }
     final pinned = List.of(widget.pet.pinnedIds);
+    String msg;
     if (pinned.contains(id)) {
       pinned.remove(id);
+      msg = '已从首页取消固定：${kIntents[indexOfIntent(id)].name}';
     } else {
       pinned.insert(0, id);
       if (pinned.length > 3) pinned.removeRange(3, pinned.length);
+      msg = '已固定到首页第 1 位：${kIntents[indexOfIntent(id)].name}';
     }
     await update(widget.pet.copyWith(pinnedIds: pinned));
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
+      );
+    }
   }
 
   @override
