@@ -79,15 +79,17 @@ class PoseEstimator private constructor(
         val scaled = letterbox(bitmap, inW, inH)
         val input = BitmapToInt8OrFloat(scaled, inW, inH)
 
-        // 3) 推理（输出用一维 FloatArray）
+        // 3) 推理（输出按模型实际形状 [1,56,N] 分配多维数组）
         val outShape = interpreter.getOutputTensor(0).shape()
-        val outSize = outShape.fold(1) { a, b -> a * b.coerceAtLeast(1) }
-        val out = FloatArray(outSize)
         Log.d(TAG, "output tensor shape=${outShape.contentToString()}")
+        val dims = outShape.filter { it > 0 }.toIntArray()
+        val out = Array(dims[0]) { Array(dims[1]) { FloatArray(dims[2]) } }
         interpreter.run(input, out)
+        val flat = out[0].flatMap { it.asList() }.toFloatArray()
 
-        // 4) 解析 [1,57,N] 或 [57,N,1]
-        return parseOutput(out, outShape, bitmap.width, bitmap.height, inW, inH)
+        // 4) 解析 [1,57,N] 或 [57,N,1]（本模型为 [1,56,N]，57 逻辑兼容 56：
+        //    4 box + 1 conf + 51=17×3，通道数从张量形状动态取）
+        return parseOutput(flat, outShape, bitmap.width, bitmap.height, inW, inH)
     }
 
     /** letterbox：等比缩放 + 置中填充，返回缩放后 bitmap 与有效区偏移 */
@@ -141,17 +143,20 @@ class PoseEstimator private constructor(
         out: FloatArray, shape: IntArray,
         origW: Int, origH: Int, inW: Int, inH: Int
     ): PoseResult? {
-        // 识别布局：通道数=57 在哪一维
+        // 识别布局：通道数在哪一维（pose 头 4+1+3K，K=17 时为 57；
+        // 导出的 256px 模型为 56 = 4+1+17×3 - 2，按实际通道数动态解析）
         val dims = shape.filter { it > 0 }
-        if (dims.size < 2) { Log.w(TAG, "unexpected output shape $shape"); return null }
-        val chFirst = (dims.getOrNull(1) == 57)          // [1,57,N]
-        val channels = if (chFirst) dims[1] else dims[dims.size - 2]
-        val num = if (chFirst) dims[dims.size - 1] else dims[1]
-        if (channels != 57) {
-            Log.w(TAG, "expect 57 channels, got $channels (pose head changed?)")
+        if (dims.size < 3) { Log.w(TAG, "unexpected output shape $shape"); return null }
+        val chFirst = dims[1] <= dims[2]                 // [1,C,N]: C<=N
+        val channels = if (chFirst) dims[1] else dims[2]
+        val num = if (chFirst) dims[2] else dims[1]
+        val kptCount = (channels - 5) / 3
+        if (kptCount < 1) {
+            Log.w(TAG, "no keypoint channels: channels=$channels")
+            return null
         }
         val n = num
-        Log.d(TAG, "parse: layout=${if (chFirst) "[1,57,N]" else "[57,N,1]"} N=$n")
+        Log.d(TAG, "parse: layout=${if (chFirst) "[1,C,N]" else "[C,N,1]"} C=$channels N=$n kpts=$kptCount")
 
         fun at(c: Int, i: Int): Float =
             if (chFirst) out[c * n + i] else out[c * n + i]  // 两种布局在此等价
@@ -170,17 +175,17 @@ class PoseEstimator private constructor(
         val cy = at(1, bestIdx) / inH
         val bw = at(2, bestIdx) / inW
         val bh = at(3, bestIdx) / inH
-        val kpts = FloatArray(17 * 3)
-        for (k in 0 until 17) {
+        val kpts = FloatArray(kptCount * 3)
+        for (k in 0 until kptCount) {
             kpts[k * 3] = (at(5 + k * 3, bestIdx) / inW).coerceIn(0f, 1f)
             kpts[k * 3 + 1] = (at(6 + k * 3, bestIdx) / inH).coerceIn(0f, 1f)
             kpts[k * 3 + 2] = at(7 + k * 3, bestIdx)
         }
         var visCount = 0
-        for (k in 0 until 17) {
+        for (k in 0 until kptCount) {
             if (kpts[k * 3 + 2] > CONF_THRESHOLD) visCount++
         }
-        Log.i(TAG, "detected conf=%.2f kptsVis=%d/17".format(bestConf, visCount))
+        Log.i(TAG, "detected conf=%.2f kptsVis=%d/%d".format(bestConf, visCount, kptCount))
         return PoseResult(
             bestConf,
             floatArrayOf(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2),
