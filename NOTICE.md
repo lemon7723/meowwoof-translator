@@ -60,6 +60,12 @@ v1.3.0 补采（按参考板风格清单扩充，全部 CC0）：
   啾叫 chirp（18416, 634174, 842520, 845517, 870301, 499362）
   完整作者与标题见 _sfx_raw3/index.json。
 
+v1.3.1 第二轮补采：
+- 索求喵 food meow（843100, 120160 Oneirophil, 650417 leo153）
+- 犬叹气 sigh（427172）、犬哈欠 yawn（826022, 827660 qubodup, 423490）
+  叹气/哈欠为犬类安定信号（calming signal），用于该睡了与安抚它主文件。
+  完整作者与标题见 _sfx_raw3/index.json。
+
 ## C. 行为学依据（叫声选择与说明文案）
 
 - Schötz S. MEOWSIC 项目猫声分类（meowsic.se，基于 Moelk 1944）
