@@ -68,14 +68,21 @@ class _HomePageState extends State<HomePage> {
     await ProfileStore.save(p);
   }
 
+  /// 场景播放计数（首页快捷卡片按常用度排序）
+  Future<void> _recordUsage(String intentId) async {
+    final counts = Map.of(_pet.usageCounts);
+    counts[intentId] = (counts[intentId] ?? 0) + 1;
+    await _updatePet(_pet.copyWith(usageCounts: counts));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _page,
         children: [
-          TranslatePage(pet: _pet),
-          CallLibraryPage(pet: _pet),
+          TranslatePage(pet: _pet, onUsage: _recordUsage),
+          CallLibraryPage(pet: _pet, onUpdate: _updatePet),
           PetPage(pet: _pet, onUpdate: _updatePet),
         ],
       ),
@@ -102,7 +109,10 @@ enum _ModelStage { loading, ready, failed }
 
 class TranslatePage extends StatefulWidget {
   final PetProfile pet;
-  const TranslatePage({super.key, required this.pet});
+
+  /// 播放场景后回调（首页/快捷卡都走这里），用于统计使用频次
+  final void Function(String intentId) onUsage;
+  const TranslatePage({super.key, required this.pet, required this.onUsage});
 
   @override
   State<TranslatePage> createState() => _TranslatePageState();
@@ -114,8 +124,9 @@ class _TranslatePageState extends State<TranslatePage>
   String? _error;
   bool _listening = false;
   bool _playing = false;
+  String? _playingIntent;
   bool _awaitingFinal = false;
-  String _partial = '';
+  TranslatorResult? _matched;
   Timer? _finalTimeout;
   Timer? _playingTimer;
   late final AnimationController _pulse;
@@ -161,10 +172,6 @@ class _TranslatePageState extends State<TranslatePage>
         return;
       }
       VoiceBridge.setHandlers(
-        onPartial: (json) {
-          if (!mounted) return;
-          setState(() => _partial = textFromVoskJson(json));
-        },
         onFinal: (json) => _onFinal(textFromVoskJson(json)),
         onError: (msg) {
           if (!mounted) return;
@@ -193,7 +200,7 @@ class _TranslatePageState extends State<TranslatePage>
     _finalTimeout?.cancel();
     setState(() {
       _listening = true;
-      _partial = '';
+      _matched = null;
       _error = null;
       _awaitingFinal = false;
     });
@@ -233,8 +240,9 @@ class _TranslatePageState extends State<TranslatePage>
     if (!_awaitingFinal || !mounted) return;
     _awaitingFinal = false;
     _finalTimeout?.cancel();
-    // v1.2.1：不再展示"翻译结果卡片"，识别 → 直接播叫声
+    // v1.2.2：不弹识别文字卡片，改为「识别到指令：X，已匹配猫/狗叫」提示条
     final r = IntentMatcher.translate(text);
+    setState(() => _matched = r);
     await _play(r.intent.id);
   }
 
@@ -255,11 +263,20 @@ class _TranslatePageState extends State<TranslatePage>
           repeat: repeatCount(intentId));
       final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
           widget.pet.playbackRate;
-      setState(() => _playing = true);
+      setState(() {
+        _playing = true;
+        _playingIntent = intentId;
+      });
+      widget.onUsage(intentId); // 使用频次 → 首页快捷排序
       _playingTimer?.cancel();
       _playingTimer =
           Timer(Duration(milliseconds: durMs.toInt() + 300), () {
-        if (mounted) setState(() => _playing = false);
+        if (mounted) {
+          setState(() {
+            _playing = false;
+            _playingIntent = null;
+          });
+        }
       });
     } catch (e) {
       if (mounted) {
@@ -292,13 +309,60 @@ class _TranslatePageState extends State<TranslatePage>
             ),
           ),
           const SizedBox(height: 16),
-          if (_partial.isNotEmpty || _listening) _partialCard(cs),
+          // v1.2.2：不再弹识别文字卡片，只给一行「识别到指令」提示
+          if (_listening)
+            _hintLine(cs, Icons.hearing, '正在听……松开立即翻译')
+          else if (_matched != null) ...[
+            if (_matched!.isFallback)
+              _hintLine(cs, Icons.chat_bubble_outline, '没听清，先陪它聊两句')
+            else
+              _hintLine(
+                cs,
+                Icons.check_circle_outline,
+                '识别到指令：${_matched!.intent.name}，'
+                '已匹配${widget.pet.species == 'cat' ? '猫' : '狗'}叫',
+              ),
+          ] else if (_playing && _playingIntent != null) ...[
+            _hintLine(
+              cs,
+              Icons.volume_up,
+              '正在播放：${_intentName(_playingIntent!)}',
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 12),
             _errorCard(cs),
           ],
           const SizedBox(height: 20),
-          _manualSection(cs),
+          _quickSection(cs),
+        ],
+      ),
+    );
+  }
+
+  String _intentName(String id) {
+    final idx = indexOfIntent(id);
+    return idx >= 0 ? kIntents[idx].name : id;
+  }
+
+  Widget _hintLine(ColorScheme cs, IconData icon, String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 18, color: cs.primary),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -377,25 +441,6 @@ class _TranslatePageState extends State<TranslatePage>
     );
   }
 
-  Widget _partialCard(ColorScheme cs) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('正在识别', style: Theme.of(context).textTheme.labelSmall),
-            const SizedBox(height: 4),
-            Text(
-              _partial.isEmpty ? '……' : _partial,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _errorCard(ColorScheme cs) {
     return Card(
       color: cs.errorContainer,
@@ -407,27 +452,136 @@ class _TranslatePageState extends State<TranslatePage>
     );
   }
 
-  /// 不方便说话时，直接点场景播放
-  Widget _manualSection(ColorScheme cs) {
+  /// 首页下半部：横向滑动快捷卡片（常用 3 个）+ 展开更多抽屉
+  Widget _quickSection(ColorScheme cs) {
+    final quickIds = quickIntentIds(widget.pet, limit: 3);
+    final quick = quickIds.map((id) => kIntents[indexOfIntent(id)]).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('不方便说话？直接点场景播放',
-            style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        Row(
           children: [
-            for (final it in kIntents)
-              ActionChip(
-                label: Text(it.name),
-                onPressed: () => _play(it.id),
-              ),
+            Expanded(
+              child: Text('不方便说话？直接点场景播放',
+                  style: Theme.of(context).textTheme.titleSmall),
+            ),
+            TextButton.icon(
+              onPressed: _openDrawer,
+              icon: const Icon(Icons.grid_view, size: 18),
+              label: const Text('全部场景'),
+            ),
           ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 118,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: quick.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, i) {
+              final it = quick[i];
+              final playing = _playingIntent == it.id;
+              final idx = indexOfIntent(it.id);
+              return _quickCard(cs, it, idx, playing);
+            },
+          ),
         ),
       ],
     );
+  }
+
+  Widget _quickCard(ColorScheme cs, IntentCall it, int idx, bool playing) {
+    return SizedBox(
+      width: 148,
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _play(it.id),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      playing ? Icons.volume_up : Icons.pets,
+                      size: 20,
+                      color: playing ? cs.primary : kSeed,
+                    ),
+                    const Spacer(),
+                    if (widget.pet.pinnedIds.contains(it.id))
+                      Icon(Icons.push_pin, size: 13, color: cs.outline),
+                  ],
+                ),
+                const Spacer(),
+                Text(
+                  it.name,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  it.phonetic(widget.pet.species),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: cs.primary),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openDrawer() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('全部场景',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            for (final it in kIntents)
+              ListTile(
+                leading: CircleAvatar(
+                  radius: 14,
+                  child: Text('${indexOfIntent(it.id) + 1}',
+                      style: const TextStyle(fontSize: 12)),
+                ),
+                title: Text(it.name),
+                subtitle: Text(
+                  it.phonetic(widget.pet.species),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: kSeed),
+                ),
+                trailing: widget.pet.pinnedIds.contains(it.id)
+                    ? const Icon(Icons.push_pin, size: 18)
+                    : null,
+                onTap: () => Navigator.pop(context, it.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) _play(picked);
   }
 }
 
@@ -437,7 +591,10 @@ class _TranslatePageState extends State<TranslatePage>
 
 class CallLibraryPage extends StatefulWidget {
   final PetProfile pet;
-  const CallLibraryPage({super.key, required this.pet});
+
+  /// 置顶变更回调（首页快捷卡片同步）
+  final Future<void> Function(PetProfile)? onUpdate;
+  const CallLibraryPage({super.key, required this.pet, this.onUpdate});
 
   @override
   State<CallLibraryPage> createState() => _CallLibraryPageState();
@@ -446,6 +603,9 @@ class CallLibraryPage extends StatefulWidget {
 class _CallLibraryPageState extends State<CallLibraryPage> {
   late String _species = widget.pet.species;
   String? _playingId;
+
+  /// 已展开的科普卡片（默认折叠，只留名字+播放）
+  final Set<String> _expanded = {};
 
   @override
   void didUpdateWidget(covariant CallLibraryPage oldWidget) {
@@ -487,8 +647,29 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
     }
   }
 
+  /// 置顶/取消置顶：置顶的场景会出现在首页快捷卡片最前
+  Future<void> _togglePin(String id) async {
+    final update = widget.onUpdate;
+    if (update == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前版本不支持置顶')),
+      );
+      return;
+    }
+    final pinned = List.of(widget.pet.pinnedIds);
+    if (pinned.contains(id)) {
+      pinned.remove(id);
+    } else {
+      pinned.insert(0, id);
+      if (pinned.length > 3) pinned.removeRange(3, pinned.length);
+    }
+    await update(widget.pet.copyWith(pinnedIds: pinned));
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return SafeArea(
       child: Column(
         children: [
@@ -501,8 +682,8 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                     style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 4),
                 Text(
-                  '每个意思固定一种叫声——配合奖励反复使用，'
-                  '它就会把这个声音当成"信号"记住。',
+                  '每个意思固定一种叫声——点卡片展开科普，'
+                  '图钉把最常用的固定到首页。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -547,59 +728,97 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
               itemBuilder: (context, i) {
                 final it = kIntents[i];
                 final playing = _playingId == it.id;
+                final expanded = _expanded.contains(it.id);
+                final pinned = widget.pet.pinnedIds.contains(it.id);
                 return Card(
                   margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 14,
-                              child: Text('${i + 1}',
-                                  style: const TextStyle(fontSize: 12)),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(it.name,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(
-                                          fontWeight: FontWeight.w700)),
-                            ),
-                            IconButton.filledTonal(
-                              onPressed: () => _play(it, i),
-                              icon: Icon(playing
-                                  ? Icons.volume_up
-                                  : Icons.play_arrow),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          it.phonetic(_species),
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(color: kSeed),
-                        ),
-                        const SizedBox(height: 6),
-                        Text('对它说：${it.meaning}',
-                            style: Theme.of(context).textTheme.bodyMedium),
-                        const SizedBox(height: 4),
-                        Text('作用：${it.purpose}',
-                            style: Theme.of(context).textTheme.bodySmall),
-                        const SizedBox(height: 4),
-                        Text('小贴士：${it.tip}',
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => setState(() => expanded
+                        ? _expanded.remove(it.id)
+                        : _expanded.add(it.id)),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 14,
+                                child: Text('${i + 1}',
+                                    style: const TextStyle(fontSize: 12)),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(it.name,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w700)),
+                              ),
+                              // 设为首页快捷：置顶到首页快捷卡片最前
+                              IconButton.filledTonal(
+                                visualDensity: VisualDensity.compact,
+                                tooltip: pinned
+                                    ? '取消首页快捷'
+                                    : '设为首页快捷',
+                                onPressed: () => _togglePin(it.id),
+                                icon: Icon(
+                                  pinned
+                                      ? Icons.push_pin
+                                      : Icons.push_pin_outlined,
+                                  size: 20,
+                                ),
+                              ),
+                              IconButton.filledTonal(
+                                onPressed: () => _play(it, i),
+                                icon: Icon(playing
+                                    ? Icons.volume_up
+                                    : Icons.play_arrow),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            it.phonetic(_species),
                             style: Theme.of(context)
                                 .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                    fontStyle: FontStyle.italic)),
-                      ],
+                                .titleMedium
+                                ?.copyWith(color: kSeed),
+                          ),
+                          if (expanded) ...[
+                            const SizedBox(height: 6),
+                            Text('对它说：${it.meaning}',
+                                style:
+                                    Theme.of(context).textTheme.bodyMedium),
+                            const SizedBox(height: 4),
+                            Text('作用：${it.purpose}',
+                                style:
+                                    Theme.of(context).textTheme.bodySmall),
+                            const SizedBox(height: 4),
+                            Text('小贴士：${it.tip}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                        fontStyle: FontStyle.italic)),
+                          ] else ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              '对它说：${it.meaning}',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: cs.outline),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -672,14 +891,7 @@ class _PetPageState extends State<PetPage> {
       if (x == null) return;
       final saved = await ProfileStore.importPhoto(x.path);
       if (saved != null) {
-        await widget.onUpdate(
-          PetProfile(
-            name: widget.pet.name,
-            species: widget.pet.species,
-            photoPath: saved,
-            pitchHz: widget.pet.pitchHz,
-          ),
-        );
+        await widget.onUpdate(widget.pet.copyWith(photoPath: saved));
       }
     } catch (e) {
       if (mounted) {
@@ -722,14 +934,7 @@ class _PetPageState extends State<PetPage> {
     try {
       final r = await VoiceBridge.stopPetRecording();
       final f0 = (r['f0'] as num?)?.toDouble() ?? 0;
-      await widget.onUpdate(
-        PetProfile(
-          name: widget.pet.name,
-          species: widget.pet.species,
-          photoPath: widget.pet.photoPath,
-          pitchHz: f0,
-        ),
-      );
+      await widget.onUpdate(widget.pet.copyWith(pitchHz: f0));
       setState(() {
         _lastRec = r;
         _analyzing = false;
@@ -811,14 +1016,7 @@ class _PetPageState extends State<PetPage> {
             onSubmitted: (v) {
               final name = v.trim();
               if (name.isEmpty || name == widget.pet.name) return;
-              widget.onUpdate(
-                PetProfile(
-                  name: name,
-                  species: widget.pet.species,
-                  photoPath: widget.pet.photoPath,
-                  pitchHz: widget.pet.pitchHz,
-                ),
-              );
+              widget.onUpdate(widget.pet.copyWith(name: name));
             },
           ),
           const SizedBox(height: 12),
@@ -828,14 +1026,8 @@ class _PetPageState extends State<PetPage> {
               ButtonSegment(value: 'dog', label: Text('狗'), icon: Icon(Icons.pets)),
             ],
             selected: {pet.species},
-            onSelectionChanged: (s) => widget.onUpdate(
-              PetProfile(
-                name: widget.pet.name,
-                species: s.first,
-                photoPath: widget.pet.photoPath,
-                pitchHz: widget.pet.pitchHz,
-              ),
-            ),
+            onSelectionChanged: (s) =>
+                widget.onUpdate(widget.pet.copyWith(species: s.first)),
           ),
           const SizedBox(height: 20),
           _voicePrintCard(context, pet),
@@ -843,8 +1035,8 @@ class _PetPageState extends State<PetPage> {
           Center(
             child: Text(
               _nativeVersion.isEmpty
-                  ? '毛语通 1.1.0'
-                  : '毛语通 1.1.0 · 原生端 $_nativeVersion',
+                  ? '毛语通 1.2.2'
+                  : '毛语通 1.2.2 · 原生端 $_nativeVersion',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -901,6 +1093,27 @@ class _PetPageState extends State<PetPage> {
                   ),
               ],
             ),
+            // 录音进度条：0~20 秒，走到头自动停
+            if (_recording) ...[
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: _recSecs / 20,
+                minHeight: 6,
+                borderRadius: BorderRadius.circular(3),
+              ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '$_recSecs / 20 s',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+            if (_analyzing) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(minHeight: 6),
+            ],
             if (_lastRec != null) ...[
               const SizedBox(height: 10),
               Text(
