@@ -98,11 +98,15 @@ jobs:
       - name: 单元测试
         run: flutter test
 
-      - name: 打包 APK
-        run: flutter build apk --release
+      # 按 ABI 拆包：每个 APK 只含一套引擎（flutter 引擎 so 占大头），
+      # 体积从 ~125MB 降到 ~60MB。手机装 arm64 版，模拟器装 x86_64 版。
+      - name: 打包 APK（按 ABI 拆分）
+        run: flutter build apk --release --split-per-abi
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
           name: meowwoof-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
