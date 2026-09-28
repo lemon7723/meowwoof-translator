@@ -81,6 +81,12 @@ jobs:
           if [ "$SIZE" -lt 30000000 ]; then
             echo "❌ 模型体积异常（<30MB），可能下载到错误页，请检查网络"; exit 1
           fi
+          # Vosk StorageService.unpack 要求模型目录内有 uuid 文件（版本标识）。
+          # 官方 demo 由 gradle 任务生成；我们直接解包 zip 必须自补，否则解包必败。
+          if [ ! -f "android/app/src/main/assets/model-cn/uuid" ]; then
+            uuidgen > android/app/src/main/assets/model-cn/uuid
+            echo "已生成 model-cn/uuid: $(cat android/app/src/main/assets/model-cn/uuid)"
+          fi
 
       - name: 拉取依赖
         run: flutter pub get
