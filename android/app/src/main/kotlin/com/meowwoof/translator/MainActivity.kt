@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.3.2"
+        private const val BUILD_TAG = "v1.4.0"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120
@@ -70,6 +70,10 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // v1.4.0 新增：体态识别独立 channel（不触碰下方语音/播放任何现有逻辑）
+        com.meowwoof.translator.pose.PoseChannel.register(
+            this, flutterEngine.dartExecutor.binaryMessenger
+        )
         channelRef = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channelRef?.setMethodCallHandler { call, result ->
             when (call.method) {

@@ -14,6 +14,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'data/call_library.dart';
 import 'logic/translator_engine.dart';
+import 'pages/pose_page.dart';
 import 'services/profile_store.dart';
 import 'services/voice_bridge.dart';
 
@@ -77,6 +78,7 @@ class _HomePageState extends State<HomePage> {
           TranslatePage(pet: _pet, onUpdate: _updatePet),
           CallLibraryPage(pet: _pet),
           PetPage(pet: _pet, onUpdate: _updatePet),
+          PosePage(pet: _pet),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -88,6 +90,8 @@ class _HomePageState extends State<HomePage> {
           NavigationDestination(
               icon: Icon(Icons.campaign), label: '叫声库'),
           NavigationDestination(icon: Icon(Icons.pets), label: '我的毛孩'),
+          NavigationDestination(
+              icon: Icon(Icons.accessibility_new), label: '体态'),
         ],
       ),
     );

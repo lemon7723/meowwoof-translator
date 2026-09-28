@@ -47,4 +47,7 @@ dependencies {
     // 与官方 demo 相同的 jna@aar 写法；两者均无 Google 服务依赖
     implementation "com.alphacephei:vosk-android:0.3.47@aar"
     implementation "net.java.dev.jna:jna:5.13.0@aar"
+
+    // v1.4.0 体态识别：TFLite 运行时（仅体态模块使用，语音/播放不依赖）
+    implementation "org.tensorflow:tensorflow-lite:2.14.0"
 }
