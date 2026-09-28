@@ -68,21 +68,14 @@ class _HomePageState extends State<HomePage> {
     await ProfileStore.save(p);
   }
 
-  /// 场景播放计数（首页快捷卡片按常用度排序）
-  Future<void> _recordUsage(String intentId) async {
-    final counts = Map.of(_pet.usageCounts);
-    counts[intentId] = (counts[intentId] ?? 0) + 1;
-    await _updatePet(_pet.copyWith(usageCounts: counts));
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _page,
         children: [
-          TranslatePage(pet: _pet, onUsage: _recordUsage),
-          CallLibraryPage(pet: _pet, onUpdate: _updatePet),
+          TranslatePage(pet: _pet, onUpdate: _updatePet),
+          CallLibraryPage(pet: _pet),
           PetPage(pet: _pet, onUpdate: _updatePet),
         ],
       ),
@@ -110,9 +103,9 @@ enum _ModelStage { loading, ready, failed }
 class TranslatePage extends StatefulWidget {
   final PetProfile pet;
 
-  /// 播放场景后回调（首页/快捷卡都走这里），用于统计使用频次
-  final void Function(String intentId) onUsage;
-  const TranslatePage({super.key, required this.pet, required this.onUsage});
+  /// 头像更新回调（拍照/相册入口在首页左上角）
+  final Future<void> Function(PetProfile) onUpdate;
+  const TranslatePage({super.key, required this.pet, required this.onUpdate});
 
   @override
   State<TranslatePage> createState() => _TranslatePageState();
@@ -267,7 +260,6 @@ class _TranslatePageState extends State<TranslatePage>
         _playing = true;
         _playingIntent = intentId;
       });
-      widget.onUsage(intentId); // 使用频次 → 首页快捷排序
       _playingTimer?.cancel();
       _playingTimer =
           Timer(Duration(milliseconds: durMs.toInt() + 300), () {
@@ -294,7 +286,7 @@ class _TranslatePageState extends State<TranslatePage>
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          _header(),
+          _header(cs),
           const SizedBox(height: 16),
           _micButton(cs),
           const SizedBox(height: 12),
@@ -309,10 +301,8 @@ class _TranslatePageState extends State<TranslatePage>
             ),
           ),
           const SizedBox(height: 16),
-          // v1.2.2：不再弹识别文字卡片，只给一行「识别到指令」提示
-          if (_listening)
-            _hintLine(cs, Icons.hearing, '正在听……松开立即翻译')
-          else if (_matched != null) ...[
+          // v1.3.0：识别后不再弹卡片，只给一行「识别到指令」提示
+          if (_matched != null) ...[
             if (_matched!.isFallback)
               _hintLine(cs, Icons.chat_bubble_outline, '没听清，先陪它聊两句')
             else
@@ -333,8 +323,6 @@ class _TranslatePageState extends State<TranslatePage>
             const SizedBox(height: 12),
             _errorCard(cs),
           ],
-          const SizedBox(height: 20),
-          _quickSection(cs),
         ],
       ),
     );
@@ -368,18 +356,75 @@ class _TranslatePageState extends State<TranslatePage>
     );
   }
 
-  Widget _header() {
+  /// v1.3.0：首页左上角头像，点相机角标拍照/相册更换
+  Future<void> _pickPhoto(ImageSource src) async {
+    try {
+      final picker = ImagePicker();
+      final x = await picker.pickImage(source: src, imageQuality: 85);
+      if (x == null) return;
+      final saved = await ProfileStore.importPhoto(x.path);
+      if (saved != null) {
+        await widget.onUpdate(widget.pet.copyWith(photoPath: saved));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('照片获取失败：$e')),
+        );
+      }
+    }
+  }
+
+  Widget _header(ColorScheme cs) {
     final pet = widget.pet;
     final speciesLabel = pet.species == 'cat' ? '猫' : '狗';
     return Row(
       children: [
-        CircleAvatar(
-          radius: 22,
-          backgroundImage:
-              pet.photoPath != null ? FileImage(File(pet.photoPath!)) : null,
-          child: pet.photoPath == null
-              ? const Icon(Icons.pets, size: 22)
-              : null,
+        Stack(
+          children: [
+            CircleAvatar(
+              radius: 26,
+              backgroundImage:
+                  pet.photoPath != null ? FileImage(File(pet.photoPath!)) : null,
+              child: pet.photoPath == null
+                  ? const Icon(Icons.pets, size: 26)
+                  : null,
+            ),
+            Positioned(
+              right: -2,
+              bottom: -2,
+              child: GestureDetector(
+                onTap: () async {
+                  final src = await showModalBottomSheet<ImageSource>(
+                    context: context,
+                    showDragHandle: true,
+                    builder: (_) => const SafeArea(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ListTile(
+                            leading: Icon(Icons.photo_camera),
+                            title: Text('拍照'),
+                          ),
+                          ListTile(
+                            leading: Icon(Icons.photo),
+                            title: Text('从相册选'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                  if (src != null) _pickPhoto(src);
+                },
+                child: CircleAvatar(
+                  radius: 11,
+                  backgroundColor: cs.primary,
+                  child: Icon(Icons.photo_camera,
+                      size: 13, color: cs.onPrimary),
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -391,7 +436,7 @@ class _TranslatePageState extends State<TranslatePage>
               Text(
                 pet.hasVoicePrint
                     ? '$speciesLabel · 音色匹配 ${pet.playbackRate.toStringAsFixed(2)}x'
-                    : '$speciesLabel · 未录入叫声（去"我的毛孩"录一段）',
+                    : '$speciesLabel · 去下一页叫两声，我就能学会它的音色',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -451,87 +496,6 @@ class _TranslatePageState extends State<TranslatePage>
       ),
     );
   }
-
-  /// 首页下半部：横向滑动快捷卡片（常用 3 个）+ 展开更多抽屉
-  Widget _quickSection(ColorScheme cs) {
-    final quickIds = quickIntentIds(widget.pet, limit: 3);
-    final quick = quickIds.map((id) => kIntents[indexOfIntent(id)]).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('不方便说话？直接点场景播放',
-            style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: 118,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: quick.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 10),
-            itemBuilder: (context, i) {
-              final it = quick[i];
-              final playing = _playingIntent == it.id;
-              final idx = indexOfIntent(it.id);
-              return _quickCard(cs, it, idx, playing);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _quickCard(ColorScheme cs, IntentCall it, int idx, bool playing) {
-    return SizedBox(
-      width: 148,
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => _play(it.id),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      playing ? Icons.volume_up : Icons.pets,
-                      size: 20,
-                      color: playing ? cs.primary : kSeed,
-                    ),
-                    const Spacer(),
-                    if (widget.pet.pinnedIds.contains(it.id))
-                      Icon(Icons.push_pin, size: 16, color: cs.primary),
-                  ],
-                ),
-                const Spacer(),
-                Text(
-                  it.name,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  it.phonetic(widget.pet.species),
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: cs.primary),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 // ============================================================
@@ -540,10 +504,7 @@ class _TranslatePageState extends State<TranslatePage>
 
 class CallLibraryPage extends StatefulWidget {
   final PetProfile pet;
-
-  /// 置顶变更回调（首页快捷卡片同步）
-  final Future<void> Function(PetProfile)? onUpdate;
-  const CallLibraryPage({super.key, required this.pet, this.onUpdate});
+  const CallLibraryPage({super.key, required this.pet});
 
   @override
   State<CallLibraryPage> createState() => _CallLibraryPageState();
@@ -596,34 +557,6 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
     }
   }
 
-  /// 置顶/取消置顶：置顶的场景会出现在首页快捷卡片最前
-  Future<void> _togglePin(String id) async {
-    final update = widget.onUpdate;
-    if (update == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前版本不支持置顶')),
-      );
-      return;
-    }
-    final pinned = List.of(widget.pet.pinnedIds);
-    String msg;
-    if (pinned.contains(id)) {
-      pinned.remove(id);
-      msg = '已从首页取消固定：${kIntents[indexOfIntent(id)].name}';
-    } else {
-      pinned.insert(0, id);
-      if (pinned.length > 3) pinned.removeRange(3, pinned.length);
-      msg = '已固定到首页第 1 位：${kIntents[indexOfIntent(id)].name}';
-    }
-    await update(widget.pet.copyWith(pinnedIds: pinned));
-    if (mounted) {
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -639,8 +572,8 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                     style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 4),
                 Text(
-                  '每个意思固定一种叫声——点卡片展开科普，'
-                  '图钉把最常用的固定到首页。',
+                  '每个意思固定一种叫声——点卡片展开科普。'
+                  '分猫语、狗语两套，配合奖励反复使用效果最好。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -686,7 +619,6 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                 final it = kIntents[i];
                 final playing = _playingId == it.id;
                 final expanded = _expanded.contains(it.id);
-                final pinned = widget.pet.pinnedIds.contains(it.id);
                 return Card(
                   margin: EdgeInsets.zero,
                   child: InkWell(
@@ -715,20 +647,6 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                                         .titleMedium
                                         ?.copyWith(
                                             fontWeight: FontWeight.w700)),
-                              ),
-                              // 设为首页快捷：置顶到首页快捷卡片最前
-                              IconButton.filledTonal(
-                                visualDensity: VisualDensity.compact,
-                                tooltip: pinned
-                                    ? '取消首页快捷'
-                                    : '设为首页快捷',
-                                onPressed: () => _togglePin(it.id),
-                                icon: Icon(
-                                  pinned
-                                      ? Icons.push_pin
-                                      : Icons.push_pin_outlined,
-                                  size: 20,
-                                ),
                               ),
                               IconButton.filledTonal(
                                 onPressed: () => _play(it, i),

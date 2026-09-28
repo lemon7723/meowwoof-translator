@@ -7,74 +7,7 @@ import 'package:meowwoof_translator/logic/translator_engine.dart';
 import 'package:meowwoof_translator/services/profile_store.dart';
 import 'package:meowwoof_translator/services/voice_bridge.dart';
 
-void main() {
-  // ============================================================
-  // 首页快捷排序（置顶 + 使用频次）
-  // ============================================================
-  group('quick intent ordering', () {
-    test('无置顶无记录时取 kIntents 前 3 个', () {
-      final ids = quickIntentIds(PetProfile());
-      expect(ids, ['come', 'praise', 'scold']);
-    });
-
-    test('置顶排在最前，按置顶顺序', () {
-      final pet = PetProfile(pinnedIds: ['sleep', 'eat']);
-      final ids = quickIntentIds(pet);
-      expect(ids.take(2), ['sleep', 'eat']);
-      expect(ids.length, 3);
-    });
-
-    test('置顶无效 id 被过滤，不占用快捷位', () {
-      final pet = PetProfile(pinnedIds: ['sleep', 'not_exist', '']);
-      final ids = quickIntentIds(pet);
-      expect(ids.contains('not_exist'), isFalse);
-      expect(ids.contains(''), isFalse);
-      expect(ids.first, 'sleep');
-    });
-
-    test('使用次数多的排前面', () {
-      final pet = PetProfile(usageCounts: {'talk': 5, 'eat': 2});
-      final ids = quickIntentIds(pet);
-      expect(ids.first, 'talk');
-      expect(ids[1], 'eat');
-    });
-
-    test('置顶优先于使用次数', () {
-      final pet = PetProfile(
-        pinnedIds: ['play'],
-        usageCounts: {'talk': 99, 'eat': 50},
-      );
-      final ids = quickIntentIds(pet);
-      expect(ids.first, 'play');
-      expect(ids[1], 'talk');
-    });
-
-    test('limit 生效', () {
-      final pet = PetProfile(
-        pinnedIds: ['come', 'praise', 'scold', 'stop'],
-      );
-      expect(quickIntentIds(pet).length, 3);
-      expect(quickIntentIds(pet, limit: 5).length, 5);
-    });
-
-    test('PetProfile 置顶与频次序列化往返一致', () {
-      final p = PetProfile(
-        name: '芝士',
-        species: 'cat',
-        pitchHz: 620,
-        pinnedIds: ['eat', 'come'],
-        usageCounts: {'eat': 3, 'talk': 1},
-      );
-      final back = PetProfile.fromMap(p.toMap());
-      expect(back.pinnedIds, ['eat', 'come']);
-      expect(back.usageCounts['eat'], 3);
-      expect(back.usageCounts['talk'], 1);
-      expect(back.copyWith(name: '团子').name, '团子');
-      // copyWith 不传集合时保留原值
-      expect(back.copyWith(name: '团子').pinnedIds, ['eat', 'come']);
-    });
-  });
-  // ============================================================
+void main() {  // ============================================================
   // 叫声库完整性
   // ============================================================
   group('call library', () {

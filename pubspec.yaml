@@ -1,7 +1,7 @@
 name: meowwoof_translator
 description: "毛语通 1.0.0：离线人声识别（Vosk 中文小模型）→ 意图匹配 → 播放猫语/狗语叫声。10 个预设叫声（猫狗两套，带用途说明）、录宠物声音做音高分析（音色匹配）、拍照设宠物头像。纯离线，无网络权限。"
 publish_to: 'none'
-version: 1.2.3+8
+version: 1.3.0+9
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

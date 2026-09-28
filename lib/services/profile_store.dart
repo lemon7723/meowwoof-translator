@@ -8,8 +8,6 @@ import 'dart:math' as math;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../data/call_library.dart';
-
 class PetProfile {
   String name;
   String species; // 'cat' | 'dog'
@@ -124,26 +122,4 @@ class ProfileStore {
       return null;
     }
   }
-}
-
-/// 首页快捷卡片的排序逻辑（纯函数，可单测）：
-/// 1. 置顶（叫声库页图钉）永远在最前，按置顶顺序；
-/// 2. 其余按使用次数降序，次数相同按 kIntents 原始顺序；
-/// 3. 最多取 [limit] 个，默认 3。
-List<String> quickIntentIds(PetProfile pet, {int limit = 3}) {
-  final valid = kIntents.map((e) => e.id).toSet();
-  final pinned =
-      pet.pinnedIds.where(valid.contains).toSet().toList();
-  final rest = kIntents
-      .map((e) => e.id)
-      .where((id) => !pinned.contains(id))
-      .toList()
-    ..sort((a, b) {
-      final ca = pet.usageCounts[a] ?? 0;
-      final cb = pet.usageCounts[b] ?? 0;
-      if (cb != ca) return cb - ca;
-      return kIntents.indexWhere((e) => e.id == a) -
-          kIntents.indexWhere((e) => e.id == b);
-    });
-  return [...pinned, ...rest].take(limit).toList();
 }
