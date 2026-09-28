@@ -79,14 +79,12 @@ class PoseEstimator private constructor(
         val scaled = letterbox(bitmap, inW, inH)
         val input = BitmapToInt8OrFloat(scaled, inW, inH)
 
-        // 3) 推理
+        // 3) 推理（输出用一维 FloatArray）
         val outShape = interpreter.getOutputTensor(0).shape()
         val outSize = outShape.fold(1) { a, b -> a * b.coerceAtLeast(1) }
         val out = FloatArray(outSize)
-        val outMap = HashMap<Int, Any>()
-        outMap[0] = out
         Log.d(TAG, "output tensor shape=${outShape.contentToString()}")
-        interpreter.run(input, outMap)
+        interpreter.run(input, out)
 
         // 4) 解析 [1,57,N] 或 [57,N,1]
         return parseOutput(out, outShape, bitmap.width, bitmap.height, inW, inH)
