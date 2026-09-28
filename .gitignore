@@ -37,3 +37,6 @@ _sfx_raw/
 _sfx_raw2/
 
 _sfx_raw3/*.mp3
+
+tools/_pick_v132.err
+tools/_pick_v132.out
