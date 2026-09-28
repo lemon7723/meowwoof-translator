@@ -51,10 +51,11 @@ class VoiceBridge {
   static Future<Map<Object?, Object?>> stopPetRecording() => _guard(
       () async => await _ch.invokeMethod<Map<Object?, Object?>>('stopPetRecording') ?? {});
 
-  /// asset：assets/ 相对路径；rate：播放速率（0.7~1.3）
-  static Future<Map<Object?, Object?>> playCall(String asset, double rate) =>
+  /// asset：assets/ 相对路径；rate：播放速率（0.7~1.3）；repeat：连播次数（1 不重复）
+  static Future<Map<Object?, Object?>> playCall(String asset, double rate,
+          {int repeat = 1}) =>
       _guard(() async => await _ch.invokeMethod<Map<Object?, Object?>>(
-          'playCall', {'asset': asset, 'rate': rate}) ?? {});
+          'playCall', {'asset': asset, 'rate': rate, 'repeat': repeat}) ?? {});
 
   static Future<bool> stopPlaying() =>
       _guard(() async => await _ch.invokeMethod<bool>('stopPlaying') ?? false);

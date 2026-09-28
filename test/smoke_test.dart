@@ -51,7 +51,20 @@ void main() {
       expect(callAsset('dog', 'talk', 9), 'assets/sounds/dog_09_talk.wav');
     });
 
-    test('20 条叫声音频真实存在于 assets/sounds/', () {
+    test('连播次数配置覆盖全部意图且取值合理', () {
+      for (final it in kIntents) {
+        final n = repeatCount(it.id);
+        expect(n, inInclusiveRange(1, 3), reason: '${it.id} 连播次数异常：$n');
+      }
+      // 安抚/入睡类只播一次，呼叫/玩驾驶类连播 3 次
+      expect(repeatCount('sleep'), 1);
+      expect(repeatCount('comfort'), 1);
+      expect(repeatCount('come'), 3);
+      expect(repeatCount('play'), 3);
+      expect(repeatCount('stop'), 3);
+    });
+
+    test('60 条叫声音频真实存在于 assets/sounds/', () {
       // 从 test/ 到项目根
       final root = Directory.current.path;
       final dir = Directory('$root/assets/sounds');

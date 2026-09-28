@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.2.0"
+        private const val BUILD_TAG = "v1.2.1"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120
@@ -84,6 +84,7 @@ class MainActivity : FlutterActivity() {
                 "playCall" -> playCall(
                     call.argument<String>("asset") ?: "",
                     (call.argument<Double>("rate") ?: 1.0).toFloat(),
+                    call.argument<Int>("repeat") ?: 1,
                     result
                 )
                 "stopPlaying" -> {
@@ -436,7 +437,7 @@ class MainActivity : FlutterActivity() {
         player = null
     }
 
-    private fun playCall(assetOrPath: String, rate: Float, result: MethodChannel.Result) {
+    private fun playCall(assetOrPath: String, rate: Float, repeat: Int, result: MethodChannel.Result) {
         if (assetOrPath.isBlank()) {
             result.error("BAD_ARGS", "缺少叫声文件路径", null)
             return
@@ -485,14 +486,29 @@ class MainActivity : FlutterActivity() {
                     // 变速同时变调（重采样），用作音色匹配
                     mp.playbackParams = mp.playbackParams.setSpeed(rate)
                 }
+                // v1.2.1：短叫声连播（带间隙，模拟真实呼叫节奏）
+                val totalRepeats = if (repeat > 1 && dur < 3000) repeat else 1
+                val gapMs = 220L
+                var done = 1
                 mp.setOnCompletionListener { p ->
-                    try { p.release() } catch (_: Exception) {}
-                    if (player === p) player = null
+                    if (done < totalRepeats) {
+                        done++
+                        mainHandler.postDelayed({
+                            try {
+                                p.seekTo(0)
+                                p.start()
+                            } catch (_: Exception) {}
+                        }, gapMs)
+                    } else {
+                        try { p.release() } catch (_: Exception) {}
+                        if (player === p) player = null
+                    }
                 }
                 player = mp
                 mp.start()
-                android.util.Log.d(TAG, "playCall OK: $assetOrPath dur=${dur}ms rate=$rate")
-                mainHandler.post { result.success(mapOf("durationMs" to dur)) }
+                val totalMs = dur * totalRepeats + (gapMs * (totalRepeats - 1)).toInt()
+                android.util.Log.d(TAG, "playCall OK: $assetOrPath dur=${dur}ms x$totalRepeats rate=$rate")
+                mainHandler.post { result.success(mapOf("durationMs" to totalMs)) }
             } catch (e: Exception) {
                 android.util.Log.e(TAG, "playCall failed: ${e.message}")
                 mainHandler.post { result.error("PLAY_FAIL", "播放失败：${e.message}", null) }

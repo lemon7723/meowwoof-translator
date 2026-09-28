@@ -16,14 +16,14 @@
 library;
 
 /// 每个意图对应的叫声资产（species 取 'cat' / 'dog'）
-/// v1.2：每意图 3 变体，不同个体录音，播放随机轮换。
+/// v1.2.1：每个意图固定播放主文件（不再随机轮换变体）。
 String callAsset(String species, String id, int index, {int variant = 0}) {
   final i = index.toString().padLeft(2, '0');
   if (variant <= 0) return 'assets/sounds/${species}_${i}_$id.wav';
   return 'assets/sounds/${species}_${i}_${id}_v$variant.wav';
 }
 
-/// 每意图变体数（与构建脚本约定一致）
+/// 每意图变体数（资产仍保留 v1.2 的 3 变体以备用，播放端固定用主文件）
 const Map<String, int> kCatVariants = {
   'come': 3, 'praise': 3, 'scold': 3, 'stop': 3, 'eat': 3,
   'play': 3, 'walk': 3, 'sleep': 3, 'comfort': 3, 'talk': 3,
@@ -35,6 +35,14 @@ const Map<String, int> kDogVariants = {
 
 int variantCount(String species, String id) =>
     (species == 'cat' ? kCatVariants[id] : kDogVariants[id]) ?? 1;
+
+/// 每意图连播次数（叫声太短时重复 2-3 次）
+const Map<String, int> kRepeatCounts = {
+  'come': 3, 'praise': 2, 'scold': 2, 'stop': 3, 'eat': 2,
+  'play': 3, 'walk': 2, 'sleep': 1, 'comfort': 1, 'talk': 2,
+};
+
+int repeatCount(String id) => kRepeatCounts[id] ?? 2;
 
 class IntentCall {
   final String id;
@@ -60,6 +68,9 @@ class IntentCall {
   /// 使用 / 训练小贴士
   final String tip;
 
+  /// 每次触发连播次数（叫声太短时重复 2-3 次更接近真实呼唤）
+  final int repeats;
+
   const IntentCall({
     required this.id,
     required this.name,
@@ -69,6 +80,7 @@ class IntentCall {
     required this.dogPhonetic,
     required this.purpose,
     required this.tip,
+    this.repeats = 2,
   });
 
   String phonetic(String species) =>

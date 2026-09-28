@@ -9,8 +9,6 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -118,7 +116,6 @@ class _TranslatePageState extends State<TranslatePage>
   bool _playing = false;
   bool _awaitingFinal = false;
   String _partial = '';
-  TranslatorResult? _result;
   Timer? _finalTimeout;
   Timer? _playingTimer;
   late final AnimationController _pulse;
@@ -197,7 +194,6 @@ class _TranslatePageState extends State<TranslatePage>
     setState(() {
       _listening = true;
       _partial = '';
-      _result = null;
       _error = null;
       _awaitingFinal = false;
     });
@@ -233,16 +229,12 @@ class _TranslatePageState extends State<TranslatePage>
     });
   }
 
-  void _onFinal(String text) {
+  Future<void> _onFinal(String text) async {
     if (!_awaitingFinal || !mounted) return;
     _awaitingFinal = false;
     _finalTimeout?.cancel();
-    _translateAndPlay(text);
-  }
-
-  Future<void> _translateAndPlay(String text) async {
+    // v1.2.1：不再展示"翻译结果卡片"，识别 → 直接播叫声
     final r = IntentMatcher.translate(text);
-    setState(() => _result = r);
     await _play(r.intent.id);
   }
 
@@ -255,12 +247,12 @@ class _TranslatePageState extends State<TranslatePage>
     }
     final idx = indexOfIntent(intentId);
     if (idx < 0) return;
-    // 随机变体：同一意图多条录音轮换，避免"来来去去一个声"
-    final n = variantCount(widget.pet.species, intentId);
-    final v = n > 1 ? Random().nextInt(n) : 0;
-    final asset = callAsset(widget.pet.species, intentId, idx, variant: v);
+    // v1.2.1：固定主文件（不再随机轮换变体），由原生层按意图连播
+    final asset = callAsset(widget.pet.species, intentId, idx);
     try {
-      final info = await VoiceBridge.playCall(asset, widget.pet.playbackRate);
+      final info = await VoiceBridge.playCall(
+          asset, widget.pet.playbackRate,
+          repeat: repeatCount(intentId));
       final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
           widget.pet.playbackRate;
       setState(() => _playing = true);
@@ -269,26 +261,11 @@ class _TranslatePageState extends State<TranslatePage>
           Timer(Duration(milliseconds: durMs.toInt() + 300), () {
         if (mounted) setState(() => _playing = false);
       });
-    } catch (_) {
-      // 变体缺失时回退主文件
-      try {
-        final info = await VoiceBridge.playCall(
-            callAsset(widget.pet.species, intentId, idx),
-            widget.pet.playbackRate);
-        final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
-            widget.pet.playbackRate;
-        setState(() => _playing = true);
-        _playingTimer?.cancel();
-        _playingTimer =
-            Timer(Duration(milliseconds: durMs.toInt() + 300), () {
-          if (mounted) setState(() => _playing = false);
-        });
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('播放失败：$e')),
-          );
-        }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('播放失败：$e')),
+        );
       }
     }
   }
@@ -316,10 +293,6 @@ class _TranslatePageState extends State<TranslatePage>
           ),
           const SizedBox(height: 16),
           if (_partial.isNotEmpty || _listening) _partialCard(cs),
-          if (_result != null) ...[
-            const SizedBox(height: 12),
-            _resultCard(cs),
-          ],
           if (_error != null) ...[
             const SizedBox(height: 12),
             _errorCard(cs),
@@ -423,65 +396,6 @@ class _TranslatePageState extends State<TranslatePage>
     );
   }
 
-  Widget _resultCard(ColorScheme cs) {
-    final r = _result!;
-    final confLabel = switch (r.confidence) {
-      'high' => '听清了',
-      'medium' => '大概听清',
-      _ => '没听清，先陪它聊两句',
-    };
-    return Card(
-      color: cs.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '你说：${r.inputText.isEmpty ? '（没听清）' : r.inputText}',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ),
-                Chip(
-                  label: Text(confLabel, style: const TextStyle(fontSize: 11)),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(_playing ? Icons.volume_up : Icons.pets,
-                    color: cs.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '【${r.intent.name}】${r.intent.phonetic(widget.pet.species)}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text('对它说：${r.intent.meaning}',
-                style: Theme.of(context).textTheme.bodyMedium),
-            if (r.matchedWords.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text('命中触发词：${r.matchedWords.join('、')}',
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _errorCard(ColorScheme cs) {
     return Card(
       color: cs.errorContainer,
@@ -550,13 +464,12 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
       return;
     }
     setState(() => _playingId = it.id);
-    // 随机变体轮换
-    final n = variantCount(_species, it.id);
-    final v = n > 1 ? Random().nextInt(n) : 0;
-    final asset = callAsset(_species, it.id, idx, variant: v);
+    // v1.2.1：固定主文件（不再随机轮换变体），由原生层按意图连播
+    final asset = callAsset(_species, it.id, idx);
     try {
-      final info =
-          await VoiceBridge.playCall(asset, widget.pet.playbackRate);
+      final info = await VoiceBridge.playCall(
+          asset, widget.pet.playbackRate,
+          repeat: repeatCount(it.id));
       final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
           widget.pet.playbackRate;
       Future.delayed(Duration(milliseconds: durMs.toInt() + 300), () {
@@ -564,27 +477,12 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
           setState(() => _playingId = null);
         }
       });
-    } catch (_) {
-      // 变体缺失回退主文件
-      try {
-        final info = await VoiceBridge.playCall(
-            callAsset(_species, it.id, idx), widget.pet.playbackRate);
-        final durMs = ((info['durationMs'] as num?)?.toInt() ?? 800) /
-            widget.pet.playbackRate;
-        Future.delayed(Duration(milliseconds: durMs.toInt() + 300), () {
-          if (mounted && _playingId == it.id) {
-            setState(() => _playingId = null);
-          }
-        });
-        return;
-      } catch (e) {
-        if (mounted) setState(() => _playingId = null);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('播放失败：$e')),
-          );
-        }
-        return;
+    } catch (e) {
+      if (mounted) setState(() => _playingId = null);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('播放失败：$e')),
+        );
       }
     }
   }
@@ -603,8 +501,8 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                     style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 4),
                 Text(
-                  '每个意思配多条真实录音轮换播放，同一个意思、永远是同类声音——'
-                  '配合奖励反复使用，它就会把这些声音当成"信号"记住。',
+                  '每个意思固定一种叫声——配合奖励反复使用，'
+                  '它就会把这个声音当成"信号"记住。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 8),
@@ -620,7 +518,7 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
                           child: Text(
                             '诚实说明：猫狗没有人类式语言，这不是"真翻译"；'
                             '是基于行为学研究的固定声音信号 + 条件反射训练法。'
-                            '素材源自 Wikimedia Commons（见 NOTICE）。',
+                            '素材源自 Wikimedia Commons 与 Freesound（见 NOTICE）。',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
