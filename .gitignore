@@ -33,3 +33,5 @@ android/app/src/main/java/io/flutter/plugins/
 
 # Mixkit 素材缓存（脚本可重新拉取）
 _sfx_raw/
+
+_sfx_raw2/

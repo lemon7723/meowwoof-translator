@@ -16,23 +16,21 @@
 library;
 
 /// 每个意图对应的叫声资产（species 取 'cat' / 'dog'）
-/// v1.1：每个意图有多条变体（variants），播放时随机挑一条，避免"来来去去一个声"。
-/// 变体命名：{species}_{intent序号:02d}_{变体号}.wav
+/// v1.2：每意图 3 变体，不同个体录音，播放随机轮换。
 String callAsset(String species, String id, int index, {int variant = 0}) {
   final i = index.toString().padLeft(2, '0');
   if (variant <= 0) return 'assets/sounds/${species}_${i}_$id.wav';
   return 'assets/sounds/${species}_${i}_${id}_v$variant.wav';
 }
 
-/// 找出某物种某意图的全部变体（主文件 + _v1/_v2/...）。
-/// Dart 无法运行时列 assets，这里静态登记变体数（与构建脚本约定一致）。
+/// 每意图变体数（与构建脚本约定一致）
 const Map<String, int> kCatVariants = {
-  'come': 2, 'praise': 2, 'scold': 2, 'stop': 2, 'eat': 2,
-  'play': 2, 'walk': 2, 'sleep': 2, 'comfort': 2, 'talk': 2,
+  'come': 3, 'praise': 3, 'scold': 3, 'stop': 3, 'eat': 3,
+  'play': 3, 'walk': 3, 'sleep': 3, 'comfort': 3, 'talk': 3,
 };
 const Map<String, int> kDogVariants = {
-  'come': 2, 'praise': 2, 'scold': 2, 'stop': 2, 'eat': 2,
-  'play': 2, 'walk': 2, 'sleep': 2, 'comfort': 2, 'talk': 2,
+  'come': 3, 'praise': 3, 'scold': 3, 'stop': 3, 'eat': 3,
+  'play': 3, 'walk': 3, 'sleep': 3, 'comfort': 3, 'talk': 3,
 };
 
 int variantCount(String species, String id) =>

@@ -32,7 +32,24 @@
 完整作者名单见各文件页：
 https://commons.wikimedia.org/wiki/File:<文件名>
 
-## B. 行为学依据（叫声选择与说明文案）
+## B. Freesound（全部 CC0，无署名义务，仍列出以示尊重）
+
+按查询词采样的 CC0 素材（每条录音为不同个体/录音人）：
+- 猫喵：cat meow / kitten meow（tuberatanka, steffcaffrey, megrez7274,
+  freemaster2, Lukey1028, videog, lolamadeus, Breviceps, kyles, Countrygirls13）
+- 咕噜：cat purr（Buskieboy, JKata, druulian, rainkencana, TheKingOfGeeks360）
+- 哈气：cat hiss（Zabuhailo, ken788, Wrenasmir, aunrea, dinoroki）
+- 狗吠：dog bark / puppy bark（v23, abhisheky948, wateenfotos, felix.blume,
+  randbsoundbites, qubodup, AntumDeluge, vialgames, dtmendes, yunjish）
+- 呜咽：dog whine（josephdeiorio, kyles, 15GPanskaBokstefflova_Nicola,
+  RavenWolfProds, jedg）
+- 低吼：dog growl（akiuee, Mystikuum, 15GPanskaBokstefflova_Nicola,
+  randbsoundbites）
+- 嚎：dog howl（simcotter, PostProdDog, abhisheky948, LaughingCynic, CT.QM_5）
+
+来源页：https://freesound.org/s/<id>/（id 见 tools/sample_freesound.py 输出）
+
+## C. 行为学依据（叫声选择与说明文案）
 
 - Schötz S. MEOWSIC 项目猫声分类（meowsic.se，基于 Moelk 1944）
 - Yin S, McCowan B. Barking in domestic dogs: context specificity
