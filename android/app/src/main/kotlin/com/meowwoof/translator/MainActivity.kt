@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.3.1"
+        private const val BUILD_TAG = "v1.3.2"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120

@@ -66,6 +66,12 @@ v1.3.1 第二轮补采：
   叹气/哈欠为犬类安定信号（calming signal），用于该睡了与安抚它主文件。
   完整作者与标题见 _sfx_raw3/index.json。
 
+v1.3.2 补充（用户提供素材，经声学画像对号入座）：
+- usersfx_meow_a/b/c（三段喵叫实录）、usersfx_meow_happy、
+  usersfx_purr_a/b（两段咕噜）、usersfx_hiss（短促哈气）、
+  usersfx_nasty（发情期长嚎，仅截取特征段参考，未直接入库）
+  已并入 _sfx_raw2/，用于 cat_04_eat / dog_07_sleep / dog_08_comfort 重制。
+
 ## C. 行为学依据（叫声选择与说明文案）
 
 - Schötz S. MEOWSIC 项目猫声分类（meowsic.se，基于 Moelk 1944）
