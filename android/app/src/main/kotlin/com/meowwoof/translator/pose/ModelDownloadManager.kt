@@ -35,10 +35,10 @@ object ModelDownloadManager {
      * 备用直链：主 URL 失效时依次尝试。
      * 注：ultralytics 官方 assets 仓库从未发布过 pose tflite（实测 404），
      * 下面的备用链是本项目仓库的 raw 直链：
-     * yolov8n-pose fp16 tflite（256px 输入，官方权重导出，实测 200/6.67MB）。
+     * yolov8n-pose float32 tflite（256px 输入，官方权重导出，实测 200/12.65MB）。
      */
     val FALLBACK_URLS = listOf(
-        "https://raw.githubusercontent.com/lemon7723/meowwoof-translator/main/models/yolov8n-pose_fp16.tflite"
+        "https://raw.githubusercontent.com/lemon7723/meowwoof-translator/main/models/yolov8n-pose_fp32.tflite"
     )
 
     /** 重试参数 */
