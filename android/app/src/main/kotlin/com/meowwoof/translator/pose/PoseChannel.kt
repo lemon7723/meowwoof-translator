@@ -35,15 +35,15 @@ object PoseChannel {
                 when (call.method) {
                     "prepareModel" -> {
                         val ctx = activity.applicationContext
+                        val channel = io.flutter.plugin.common.MethodChannel(messenger, CHANNEL)
                         executor.execute {
                             try {
                                 val f = ModelDownloadManager.ensureModel(ctx) { pct ->
-                                    // 进度经主线程 method call 回调在 Dart 端用 EventChannel 太重，
-                                    // 这里直接借 ProgressListener 由 Dart 轮询 progress 亦可；
-                                    // 简化实现：进度走 invokeMethod 主动推送
-                                    io.flutter.plugin.common.MethodChannel(
-                                        messenger, CHANNEL
-                                    ).invokeMethod("onProgress", pct)
+                                    // 进度推送：MethodChannel 调用必须在主线程（@UiThread），
+                                    // 此处在下载线程，必须经 main{} 切换，否则抛
+                                    // "Methods marked with @UiThread must be executed on the main thread"
+                                    // 并中断整个下载（v1.5.7 模拟器实测踩坑）
+                                    main { channel.invokeMethod("onProgress", pct) }
                                 }
                                 main { result.success(mapOf("path" to f.absolutePath)) }
                             } catch (t: Throwable) {
