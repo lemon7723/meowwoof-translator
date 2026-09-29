@@ -90,22 +90,23 @@ class PoseEstimator private constructor(
         // 2) 预处理：中心方裁剪 + 缩放 + mmpose mean/std + NCHW
         val input = preprocess(bitmap, inW, inH)
 
-        // 3) 推理：两个输出张量 [1,17,512]（逐张量 feed/run/fetch，类型明确）
+        // 3) 推理：两个输出张量 [1,17,512]（输出缓冲带 batch 维，与张量形状严格一致）
         val outCount = interpreter.outputTensorCount
         val outShapes = Array(outCount) { interpreter.getOutputTensor(it).shape() }
-        val inBuf = input
-        // 输入签名：单输入模型直接 run(inputs, outputsMap) 有类型歧义，
-        // 改用 runForMultipleInputsOutputs：inputs 为数组，outputs 为索引 Map
         val outputs = Array(outCount) { i ->
             val s = outShapes[i]
-            Array(s[1]) { FloatArray(s[2]) }   // [K, bins]
+            // [1, K, bins] —— 三维数组与张量形状逐维一致
+            Array(s[0]) { Array(s[1]) { FloatArray(s[2]) } }
         }
         val outputsMap = HashMap<Int, Any>()
         for (i in outputs.indices) outputsMap[i] = outputs[i]
-        interpreter.runForMultipleInputsOutputs(arrayOf(inBuf), outputsMap)
+        interpreter.runForMultipleInputsOutputs(arrayOf(input), outputsMap)
+        // 去掉 batch 维后再解析
+        val simccX = outputs[0][0]   // [K, bins]
+        val simccY = outputs[1][0]   // [K, bins]
 
         // 4) SimCC 解析：argmax / 2 → 256 空间坐标，再反算原图归一化
-        return parseSimCC(outputs[0], outputs[1], bitmap.width, bitmap.height, inW, inH)
+        return parseSimCC(simccX, simccY, bitmap.width, bitmap.height, inW, inH)
     }
 
     /** 中心方裁剪 → 256×256 → RGB float32 NCHW，mmpose mean/std 归一化 */
