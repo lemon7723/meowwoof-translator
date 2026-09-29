@@ -126,13 +126,13 @@ class PoseEstimator private constructor(
         val plane = dstW * dstH
         val r = FloatArray(plane); val g = FloatArray(plane); val b = FloatArray(plane)
         for (i in px.indices) {
-            r[i] = ((px[i] shr 16) and 0xFF) - MEAN[0]
-            g[i] = ((px[i] shr 8) and 0xFF) - MEAN[1]
-            b[i] = (px[i] and 0xFF) - MEAN[2]
+            r[i] = (((px[i] shr 16) and 0xFF).toFloat() - MEAN[0]) / STD[0]
+            g[i] = (((px[i] shr 8) and 0xFF).toFloat() - MEAN[1]) / STD[1]
+            b[i] = ((px[i] and 0xFF).toFloat() - MEAN[2]) / STD[2]
         }
-        for (i in 0 until plane) buf.putFloat(r[i] / STD[0])
-        for (i in 0 until plane) buf.putFloat(g[i] / STD[1])
-        for (i in 0 until plane) buf.putFloat(b[i] / STD[2])
+        for (i in 0 until plane) buf.putFloat(r[i])
+        for (i in 0 until plane) buf.putFloat(g[i])
+        for (i in 0 until plane) buf.putFloat(b[i])
         buf.rewind()
         return buf
     }
