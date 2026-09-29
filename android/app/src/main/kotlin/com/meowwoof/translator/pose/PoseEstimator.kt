@@ -152,29 +152,30 @@ class PoseEstimator private constructor(
         if (k == 0) { Log.w(TAG, "empty simcc output"); return null }
         val bins = simccX[0].size
 
+        // SimCC 的 logits 分布平坦（实测 top1≈0.92，top5 几乎并列），
+        // 「峰锐度」无区分度。改用「峰值响应占比」：每个关键点的 (top1x+top1y)/2
+        // 除以全图最大峰值响应，得到 0-1 的相对强度作为等效置信度。
+        var globalMax = 1e-6f
+        val peakX = FloatArray(k); val peakY = FloatArray(k)
+        for (i in 0 until k) {
+            for (b in 0 until bins) {
+                if (simccX[i][b] > peakX[i]) peakX[i] = simccX[i][b]
+                if (simccY[i][b] > peakY[i]) peakY[i] = simccY[i][b]
+            }
+            val m = maxOf(peakX[i], peakY[i])
+            if (m > globalMax) globalMax = m
+        }
+
         val kpts = FloatArray(k * 3)
         var bestConf = 0f
         var minX = 1f; var minY = 1f; var maxX = 0f; var maxY = 0f
         var valid = 0
 
         for (i in 0 until k) {
-            val xs = simccX[i]; val ys = simccY[i]
-            var top1x = 0; var top2x = 0; var v1x = -1f; var v2x = -1f
-            for (b in 0 until bins) {
-                val v = xs[b]
-                if (v > v1x) { v2x = v1x; v1x = v; top2x = top1x; top1x = b }
-                else if (v > v2x) { v2x = v; top2x = b }
-            }
-            var top1y = 0; var v1y = -1f
-            for (b in 0 until bins) {
-                val v = ys[b]
-                if (v > v1y) { v1y = v; top1y = b }
-            }
-            // 峰值锐度：与次峰的分差比例（SimCC 无置信通道的等效替代）
-            val sharp = if (v1x <= 0f) 0f else ((v1x - v2x) / v1x).coerceIn(0f, 1f)
-            // 峰值强度：归一化到该关键点最大可能（跨 x/y 峰值取平均占比）
-            val strength = (v1x + v1y) / 2f / (maxOf(v1x, v1y) + 1e-9f).coerceAtLeast(1e-9f)
-            val conf = (0.6f * sharp + 0.4f * strength).coerceIn(0f, 1f)
+            var top1x = 0; for (b in 1 until bins) if (simccX[i][b] > simccX[i][top1x]) top1x = b
+            var top1y = 0; for (b in 1 until bins) if (simccY[i][b] > simccY[i][top1y]) top1y = b
+            // 等效置信度：峰值响应 / 全图最大响应（相对强度，0-1）
+            val conf = ((peakX[i] + peakY[i]) / 2f / globalMax).coerceIn(0f, 1f)
 
             val kx = top1x / 2f / inW   // bins=512 → 256 空间 → 归一化
             val ky = top1y / 2f / inH
