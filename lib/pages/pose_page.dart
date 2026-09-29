@@ -258,7 +258,7 @@ class _PosePageState extends State<PosePage> {
             _row('叫声情绪', f.audioEmotion ?? '（本通道无结果）'),
             _row('体态情绪', f.poseEmotion == null
                 ? '（本通道无结果）'
-                : '$f.poseEmotion${_poseConf != null
+                : '${f.poseEmotion}${_poseConf != null
                     ? '（置信 ${(_poseConf! * 100).toStringAsFixed(0)}%）'
                     : ''}${_poseDetail != null ? ' · $_poseDetail' : ''}'),
             const Divider(height: 16),
