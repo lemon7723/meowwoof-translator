@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../main.dart' show kSeed;
+import '../services/history_store.dart';
 import '../services/pose_service.dart';
 import '../services/profile_store.dart';
 
@@ -98,6 +99,18 @@ class _PosePageState extends State<PosePage> {
         // 音频通道没有结果时传 null → 融合走"单方展示"兜底。
         _stage = 'done';
       });
+      // v1.6.0：识别成功自动入历史库（供「识别历史」页汇总）
+      try {
+        await HistoryStore.add(HistoryItem(
+          kind: 'pose',
+          mediaPath: x.path,
+          species: species,
+          emotion: r.poseEmotion ?? '',
+          detail: r.detail ?? '',
+          conf: r.conf,
+          createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        ));
+      } catch (_) {}
       await _fuse();
     } on PoseException catch (e) {
       if (mounted) {

@@ -15,7 +15,8 @@ import 'package:image_picker/image_picker.dart';
 
 import 'data/call_library.dart';
 import 'logic/translator_engine.dart';
-import 'pages/pose_page.dart';
+import 'pages/home_launcher.dart';
+import 'services/history_store.dart';
 import 'services/profile_store.dart';
 import 'services/recording_store.dart';
 import 'services/voice_bridge.dart';
@@ -38,31 +39,31 @@ class MeowWoofApp extends StatelessWidget {
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: kSeed),
       ),
-      home: const HomePage(),
+      home: const HomeRoot(),
     );
   }
 }
 
 // ============================================================
-// 首页骨架（三页导航）
+// 根容器：加载资料后进入 Launcher 首页（v1.6.0 iOS 宫格）
 // ============================================================
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class HomeRoot extends StatefulWidget {
+  const HomeRoot({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomeRoot> createState() => _HomeRootState();
 }
 
-class _HomePageState extends State<HomePage> {
-  int _page = 0;
+class _HomeRootState extends State<HomeRoot> {
   PetProfile _pet = PetProfile();
+  bool _loaded = false;
 
   @override
   void initState() {
     super.initState();
     ProfileStore.load().then((p) {
-      if (mounted) setState(() => _pet = p);
+      if (mounted) setState(() { _pet = p; _loaded = true; });
     });
   }
 
@@ -73,30 +74,10 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(
-        index: _page,
-        children: [
-          TranslatePage(pet: _pet, onUpdate: _updatePet),
-          CallLibraryPage(pet: _pet),
-          PetPage(pet: _pet, onUpdate: _updatePet),
-          PosePage(pet: _pet),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _page,
-        onDestinationSelected: (i) => setState(() => _page = i),
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.translate), label: '翻译'),
-          NavigationDestination(
-              icon: Icon(Icons.campaign), label: '叫声库'),
-          NavigationDestination(icon: Icon(Icons.pets), label: '我的毛孩'),
-          NavigationDestination(
-              icon: Icon(Icons.accessibility_new), label: '体态'),
-        ],
-      ),
-    );
+    if (!_loaded) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return HomeLauncher(pet: _pet, onUpdate: _updatePet);
   }
 }
 
@@ -848,6 +829,19 @@ class _PetPageState extends State<PetPage> {
         ));
         if (evicted != null) evictedNote = '最早一条录音已自动清理';
       } catch (_) {}
+      // v1.6.0：录音识别结果入统一历史库（f0>0 时给出情绪标签，否则记“未识别”）
+      try {
+        await HistoryStore.add(HistoryItem(
+          kind: 'audio',
+          mediaPath: (r['path'] as String?) ?? '',
+          species: widget.pet.species,
+          emotion: f0 > 0 ? '已分析' : '未识别到清晰叫声',
+          detail:
+              '基频 ${f0.toStringAsFixed(0)} Hz，时长 ${((r['durationMs'] as num?)?.toInt() ?? 0) / 1000}s',
+          conf: null,
+          createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        ));
+      } catch (_) {}
       setState(() {
         _lastRec = r;
         _analyzing = false;
@@ -1149,3 +1143,4 @@ class _PetPageState extends State<PetPage> {
     );
   }
 }
+
