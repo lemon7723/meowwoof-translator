@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.5.7"
+        private const val BUILD_TAG = "v1.5.9"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120
@@ -54,8 +54,9 @@ class MainActivity : FlutterActivity() {
     // ---- Vosk ----
     private var model: Model? = null
     private var speechService: SpeechService? = null
-    private var channelRef: MethodChannel? = null
 
+    @Volatile private var voiceRunner: com.meowwoof.translator.voice.GainBoostedRecognizerRunner? = null
+    private var channelRef: MethodChannel? = null
     // ---- 录音 ----
     private var audioRecord: AudioRecord? = null
     private var recThread: Thread? = null
@@ -175,9 +176,14 @@ class MainActivity : FlutterActivity() {
                 } else {
                     Recognizer(m, SAMPLE_RATE.toFloat(), grammar)
                 }
-                val service = SpeechService(rec, SAMPLE_RATE.toFloat())
-                service.startListening(voskListener)
-                speechService = service
+                // v1.5.9 录音灵敏度修复：不用 SpeechService 直读设备音频，
+                // 改为 GainBoostedRecognizerRunner 自读自喂 —— 帧级 AGC
+                // （目标 -22.5dBFS，增益上限 +18dB）+ 软限幅，小音量说话
+                // 也能把词匹配分数提到识别门限。回调接口与原一致。
+                val runner = com.meowwoof.translator.voice.GainBoostedRecognizerRunner(
+                    rec, SAMPLE_RATE, voskListener)
+                runner.start()
+                voiceRunner = runner
                 mainHandler.post { result.success(true) }
             } catch (e: Exception) {
                 mainHandler.post { result.error("START_FAIL", e.message, null) }
@@ -189,7 +195,8 @@ class MainActivity : FlutterActivity() {
         executor.execute {
             try {
                 // stop() 结束收音并冲刷解码器，final 结果会回调 onFinalResult
-                speechService?.stop()
+                voiceRunner?.stopCapture()
+                voiceRunner = null
                 mainHandler.post { result.success(true) }
             } catch (e: Exception) {
                 mainHandler.post { result.error("STOP_FAIL", e.message, null) }
@@ -524,6 +531,8 @@ class MainActivity : FlutterActivity() {
         recording = false
         try { audioRecord?.stop() } catch (_: Exception) {}
         try { audioRecord?.release() } catch (_: Exception) {}
+        voiceRunner?.stopCapture()
+        voiceRunner = null
         executor.execute { speechService?.stop() }
         stopPlaying()
         super.onDestroy()

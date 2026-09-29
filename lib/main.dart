@@ -10,12 +10,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
 
 import 'data/call_library.dart';
 import 'logic/translator_engine.dart';
 import 'pages/pose_page.dart';
 import 'services/profile_store.dart';
+import 'services/recording_store.dart';
 import 'services/voice_bridge.dart';
 
 void main() {
@@ -361,6 +363,9 @@ class _TranslatePageState extends State<TranslatePage>
   }
 
   /// v1.3.0：首页左上角头像，点相机角标拍照/相册更换
+  /// v1.5.9 修复：选图后页面卡死 —— 根因是底弹窗 ListTile 没有 onTap，
+  /// await showModalBottomSheet 永远不返回；且 Android13+ 相册/相机权限
+  /// 被拒绝时 image_picker 直接拋异常，需要捕获并提示。
   Future<void> _pickPhoto(ImageSource src) async {
     try {
       final picker = ImagePicker();
@@ -369,6 +374,22 @@ class _TranslatePageState extends State<TranslatePage>
       final saved = await ProfileStore.importPhoto(x.path);
       if (saved != null) {
         await widget.onUpdate(widget.pet.copyWith(photoPath: saved));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('头像已更新'), duration: Duration(seconds: 1)),
+          );
+        }
+      }
+    } on PlatformException catch (e) {
+      // Android13+：READ_MEDIA_IMAGES 拒绝 / 相机权限拒绝时 image_picker 拋
+      // photo_access_denied / camera_access_denied
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.code == 'photo_access_denied' ||
+                  e.code == 'camera_access_denied'
+              ? '权限被拒绝：请到系统设置 → 应用 → 宠了么 → 权限，允许后重试'
+              : '照片获取失败：${e.message ?? e.code}')),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -402,17 +423,19 @@ class _TranslatePageState extends State<TranslatePage>
                   final src = await showModalBottomSheet<ImageSource>(
                     context: context,
                     showDragHandle: true,
-                    builder: (_) => const SafeArea(
+                    builder: (sheetCtx) => SafeArea(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           ListTile(
-                            leading: Icon(Icons.photo_camera),
-                            title: Text('拍照'),
+                            leading: const Icon(Icons.photo_camera),
+                            title: const Text('拍照'),
+                            onTap: () => Navigator.pop(sheetCtx, ImageSource.camera),
                           ),
                           ListTile(
-                            leading: Icon(Icons.photo),
-                            title: Text('从相册选'),
+                            leading: const Icon(Icons.photo),
+                            title: const Text('从相册选'),
+                            onTap: () => Navigator.pop(sheetCtx, ImageSource.gallery),
                           ),
                         ],
                       ),
@@ -814,10 +837,29 @@ class _PetPageState extends State<PetPage> {
       final r = await VoiceBridge.stopPetRecording();
       final f0 = (r['f0'] as num?)?.toDouble() ?? 0;
       await widget.onUpdate(widget.pet.copyWith(pitchHz: f0));
+      // v1.5.9：录音自动存入本地历史（FIFO 10 条，私有目录）
+      String? evictedNote;
+      try {
+        final evicted = await RecordingStore.add(RecordingItem(
+          path: (r['path'] as String?) ?? '',
+          durationMs: (r['durationMs'] as num?)?.toInt() ?? 0,
+          f0: f0,
+          createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        ));
+        if (evicted != null) evictedNote = '最早一条录音已自动清理';
+      } catch (_) {}
       setState(() {
         _lastRec = r;
         _analyzing = false;
       });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('录音已保存至历史${evictedNote != null ? '（$evictedNote）' : ''}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     } catch (e) {
       setState(() => _analyzing = false);
       if (mounted) {
@@ -1010,6 +1052,97 @@ class _PetPageState extends State<PetPage> {
                   ),
                 ),
             ],
+            const SizedBox(height: 10),
+            // v1.5.9：录音历史入口（本地最多存 10 条，FIFO）
+            TextButton.icon(
+              onPressed: _openRecordingHistory,
+              icon: const Icon(Icons.history, size: 18),
+              label: const Text('录音历史（最多 10 条，可导入叫声库）'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 录音历史列表：回放 / 导入到叫声库 / 删除
+  Future<void> _openRecordingHistory() async {
+    final items = await RecordingStore.all();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('录音历史（${items.length}/10）',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            if (items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: Text('还没有录音。录一条试试～')),
+              )
+            else
+              for (final it in items)
+                ListTile(
+                  leading: const Icon(Icons.graphic_eq),
+                  title: Text(
+                      '${DateTime.fromMillisecondsSinceEpoch(it.createdAtMs).toString().substring(5, 16)} · ${(it.durationMs / 1000).toStringAsFixed(1)}s'),
+                  subtitle: it.f0 > 0
+                      ? Text('基频 ${it.f0.toStringAsFixed(0)} Hz')
+                      : null,
+                  onTap: () async {
+                    try {
+                      await VoiceBridge.playCall(it.path, 1.0, repeat: 1);
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('回放失败：$e')),
+                        );
+                      }
+                    }
+                  },
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '导入叫声库（转为固定文件，不再被自动清理）',
+                        icon: const Icon(Icons.playlist_add),
+                        onPressed: () async {
+                          final newPath = await RecordingStore.exportForLibrary(it);
+                          if (!sheetCtx.mounted) return;
+                          Navigator.pop(sheetCtx);
+                          if (newPath != null) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text(
+                                      '已导入叫声库：${newPath.split(Platform.pathSeparator).last}')),
+                            );
+                          } else if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('导入失败：源文件不存在')),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        tooltip: '删除这条',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () async {
+                          await RecordingStore.remove(it);
+                          if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                          if (mounted) _openRecordingHistory(); // 刷新列表
+                        },
+                      ),
+                    ],
+                  ),
+                ),
           ],
         ),
       ),
