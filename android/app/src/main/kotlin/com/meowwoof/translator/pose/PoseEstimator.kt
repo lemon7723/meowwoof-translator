@@ -90,17 +90,19 @@ class PoseEstimator private constructor(
         // 2) 预处理：中心方裁剪 + 缩放 + mmpose mean/std + NCHW
         val input = preprocess(bitmap, inW, inH)
 
-        // 3) 推理：两个输出张量 [1,17,512]
+        // 3) 推理：两个输出张量 [1,17,512]（逐张量 feed/run/fetch，类型明确）
         val outCount = interpreter.outputTensorCount
-        val outputs = Array(outCount) {
-            val s = interpreter.getOutputTensor(it).shape()
+        val outShapes = Array(outCount) { interpreter.getOutputTensor(it).shape() }
+        val inBuf = input
+        // 输入签名：单输入模型直接 run(inputs, outputsMap) 有类型歧义，
+        // 改用 runForMultipleInputsOutputs：inputs 为数组，outputs 为索引 Map
+        val outputs = Array(outCount) { i ->
+            val s = outShapes[i]
             Array(s[1]) { FloatArray(s[2]) }   // [K, bins]
         }
-        // TensorBuffer 式逐输出运行：inputs[0]=input, outputs[0..1]
-        val inputs = mapOf(0 to input)
         val outputsMap = HashMap<Int, Any>()
         for (i in outputs.indices) outputsMap[i] = outputs[i]
-        interpreter.runWithSignature(inputs, outputsMap)
+        interpreter.runForMultipleInputsOutputs(arrayOf(inBuf), outputsMap)
 
         // 4) SimCC 解析：argmax / 2 → 256 空间坐标，再反算原图归一化
         return parseSimCC(outputs[0], outputs[1], bitmap.width, bitmap.height, inW, inH)
