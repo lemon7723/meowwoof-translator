@@ -1,4 +1,4 @@
-/// 毛语通 · 主界面
+﻿/// 宠了么 · 主界面
 ///
 /// 三个页面：
 /// 1. 翻译页 —— 按住/点击说话 → 离线识别 → 意图匹配 → 播放对应叫声
@@ -30,7 +30,7 @@ class MeowWoofApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '毛语通',
+      title: '宠了么',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -163,7 +163,7 @@ class _TranslatePageState extends State<TranslatePage>
       if (!ok) {
         setState(() {
           _stage = _ModelStage.failed;
-          _error = '没有麦克风权限。请到系统设置 → 应用 → 毛语通 → 权限，'
+          _error = '没有麦克风权限。请到系统设置 → 应用 → 宠了么 → 权限，'
               '允许麦克风后重新打开。';
         });
         return;
@@ -246,7 +246,7 @@ class _TranslatePageState extends State<TranslatePage>
   Future<void> _play(String intentId) async {
     if (!VoiceBridge.hasNative) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('播放需要 Android 版毛语通')),
+        const SnackBar(content: Text('播放需要 Android 版宠了么')),
       );
       return;
     }
@@ -533,7 +533,7 @@ class _CallLibraryPageState extends State<CallLibraryPage> {
   Future<void> _play(IntentCall it, int idx) async {
     if (!VoiceBridge.hasNative) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('播放需要 Android 版毛语通')),
+        const SnackBar(content: Text('播放需要 Android 版宠了么')),
       );
       return;
     }
@@ -914,8 +914,8 @@ class _PetPageState extends State<PetPage> {
           Center(
             child: Text(
               _nativeVersion.isEmpty
-                  ? '毛语通 1.2.2'
-                  : '毛语通 1.2.2 · 原生端 $_nativeVersion',
+                  ? '宠了么 1.2.2'
+                  : '宠了么 1.2.2 · 原生端 $_nativeVersion',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),

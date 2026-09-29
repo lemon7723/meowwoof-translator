@@ -1,4 +1,4 @@
-/// 毛语通 · 宠物资料与设置持久化（SharedPreferences + JSON）
+﻿/// 宠了么 · 宠物资料与设置持久化（SharedPreferences + JSON）
 library;
 
 import 'dart:convert';

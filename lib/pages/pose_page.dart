@@ -1,8 +1,8 @@
-/// 体态识别页（v1.4.0）
+﻿/// 体态识别页（v1.5.7）
 ///
-/// 流程：进入页面 → 权限检查（拒绝则整页禁用）→ 模型下载（进度条/重试/
-/// 断点续传在原生层）→ 相机/相册选图 → 推理 → 三栏展示
-/// （叫声情绪 / 体态情绪 / 综合解读）+ 底部免责声明。
+/// 流程：进入页面 → 模型下载（进度条/重试/断点续传在原生层）→
+/// 相机/相册选图 → 推理 → 三栏展示（叫声情绪 / 体态情绪 / 综合解读）。
+/// 免责声明改为右上角 ⓘ 弹窗（v1.5.7）。
 /// 本页任何异常只影响本页，不触碰首页录音与叫声库（需求 6）。
 library;
 
@@ -33,9 +33,6 @@ class _PosePageState extends State<PosePage> {
   String? _poseDetail;
   double? _poseConf;
   FusionResult? _fusion;
-
-  static const _disclaimer =
-      '本结果仅趣味参考，不能作为宠物医疗诊断依据。';
 
   @override
   void initState() {
@@ -141,27 +138,42 @@ class _PosePageState extends State<PosePage> {
     return SafeArea(
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('体态观察', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 4),
-                Text(
-                  '拍一张宠物全身照，结合叫声情绪给出综合解读。'
-                  '本页为通用姿态模型的近似判断。',
-                  style: Theme.of(context).textTheme.bodySmall,
+          Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('体态观察', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 4),
+                    Text(
+                      '拍一张宠物全身照，结合叫声情绪给出综合解读。'
+                      '本页为动物姿态模型的近似判断。',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              // v1.5.7：右上角 ⓘ 信息图标 → 免责声明弹窗
+              Positioned(
+                right: 8,
+                top: 8,
+                child: IconButton(
+                  tooltip: '免责声明',
+                  icon: Icon(Icons.info_outline,
+                      size: 22, color: cs.outline),
+                  onPressed: _showDisclaimerDialog,
+                ),
+              ),
+            ],
           ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 if (_stage == 'downloading') ...[
-                  const Text('正在下载体态模型（约 4MB，仅首次）……'),
+                  const Text('正在下载体态模型（约 27MB，仅首次）……'),
                   const SizedBox(height: 8),
                   LinearProgressIndicator(value: _progress / 100),
                   const SizedBox(height: 4),
@@ -184,18 +196,41 @@ class _PosePageState extends State<PosePage> {
               ],
             ),
           ),
-          Container(
-            width: double.infinity,
-            color: cs.surfaceContainerHighest,
-            padding: const EdgeInsets.all(10),
-            child: Text(
-              _disclaimer,
-              textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: cs.outline),
-            ),
+          // v1.5.7：底部常驻免责条已移除，改为右上角 ⓘ 弹窗展示
+        ],
+      ),
+    );
+  }
+
+  /// 免责声明弹窗（需求 2.3/2.4）
+  void _showDisclaimerDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('免责声明'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('免责声明',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
+              SizedBox(height: 6),
+              Text('宠了么仅为宠物趣味AI体态、叫声娱乐识别工具，'
+                  '识别结果仅供娱乐参考，不能替代兽医专业诊断。'),
+              SizedBox(height: 6),
+              Text('AI姿态识别受光线、拍摄角度、遮挡影响，存在误判概率；'
+                  '请勿仅凭本App结果判断宠物健康状态。'),
+              SizedBox(height: 6),
+              Text('本项目使用RTMPose-Animal（AP-10K）模型，'
+                  '遵循Apache-2.0开源协议。'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('我已知晓'),
           ),
         ],
       ),

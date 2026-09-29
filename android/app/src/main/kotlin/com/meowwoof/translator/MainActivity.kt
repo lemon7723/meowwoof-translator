@@ -1,4 +1,4 @@
-package com.meowwoof.translator
+﻿package com.meowwoof.translator
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -26,12 +26,12 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * 毛语通 · Android 原生桥接（v1.0.0）
+ * 宠了么 · Android 原生桥接（v1.0.0）
  *
  * 职责（全部离线，唯一权限 RECORD_AUDIO）：
  * 1. 离线中文语音识别：Vosk 小模型（assets/model-cn 由 CI 打包时下载）
  *    - StorageService.unpack 解包到应用私有目录
- *    - Recognizer 带词表语法（grammar），只识别毛语通意图词表，小模型识别更准
+ *    - Recognizer 带词表语法（grammar），只识别宠了么意图词表，小模型识别更准
  *    - SpeechService 持续收音，partial/final 结果经 MethodChannel 回传 Dart
  * 2. 录宠物声音：AudioRecord 16kHz 单声道 PCM，停止后写 WAV 并做自相关音高分析
  * 3. 叫声播放：MediaPlayer 播放 assets/sounds 目录内的 wav（先拷到 cacheDir），
@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.4.0"
+        private const val BUILD_TAG = "v1.5.7"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120

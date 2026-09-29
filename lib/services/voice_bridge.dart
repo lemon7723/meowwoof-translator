@@ -1,4 +1,4 @@
-/// 毛语通 · 语音桥接（Android MethodChannel 封装）
+﻿/// 宠了么 · 语音桥接（Android MethodChannel 封装）
 ///
 /// 通道 meowwoof/voice，原生端见 MainActivity.kt。
 /// Web/桌面端不支持时会安全降级（hasNative == false）。
