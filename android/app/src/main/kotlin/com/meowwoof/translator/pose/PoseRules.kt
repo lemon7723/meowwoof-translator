@@ -74,16 +74,16 @@ object PoseRules {
                 Log.i(TAG, "head keypoints below conf -> treat as pose fail")
                 return null
             }
-            if (neck == null || shoulder == null || hip == null) {
-                Log.i(TAG, "body keypoints below conf -> treat as pose fail")
-                return null
-            }
+            // v1.5.4：RTMPose 对侧躺/遮挡图躯干点常低于阈值（本地实测 8/17 过），
+            // 躯干点缺失时降级为「局部判定」：只用头部/尾部可见点的规则，
+            // 保证拍照体验；全图关键点过少的极端情况仍判失败。
 
             // —— 几何特征（y 向下为正）——
             // ① 耳后压近似：眼睛高于颈部（y 更小）且间距明显 → 头部后收姿态
             //   （AP-10K 无独立耳根点；公式来源已在表注释声明）
             val eyeRef = eyeL ?: eyeR ?: nose!!
-            val earsBack = (neck.second - eyeRef.second) < -0.02f
+            val earsBack = neck != null &&
+                    (neck.second - eyeRef.second) < -0.02f
 
             // ② 尾巴方向：尾尖相对尾根，上扬(<-0.05)/下垂(>0.06)
             var tailUp = false
@@ -95,10 +95,10 @@ object PoseRules {
             }
 
             // ③ 身体前倾：肩峰向鼻子方向明显前移（横向距离大于阈值）
-            val leanForward = run {
+            val leanForward = shoulder != null && run {
                 val nx = nose?.first ?: shoulder.first
                 (shoulder.first - nx).let { Math.abs(it) > 0.12f } &&
-                        (shoulder.second - hip.second) > 0f
+                        (shoulder.second - (hip?.second ?: shoulder.second)) > 0f
             }
 
             // —— 猫规则（业务公式不变）——
