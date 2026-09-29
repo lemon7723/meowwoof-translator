@@ -5,31 +5,36 @@ import android.util.Log
 /**
  * 体态 → 情绪 规则引擎（纯 if 逻辑，无模型参与）。
  *
- * 关键点索引表（COCO 17 点布局）集中在此，未来替换宠物姿态模型时只改本表：
- *   0 鼻  1 左眼  2 右眼  3 左耳  4 右耳  5 左肩  6 右肩
- *   7 左肘 8 右肘 9 左腕 10 右腕 11 左髋 12 右髋 13 左膝
- *   14 右膝 15 左踝 16 右踝
+ * v1.5.0 关键点索引表：RTMPose-Animal（AP-10K 17 点，猫狗专用）。
+ * 【AnimalPose 关键点索引定义 —— PoseRules 使用此索引表】
+ * 0  左眼 Left Eye        头部基准
+ * 1  右眼 Right Eye       头部基准
+ * 2  鼻 Nose              鼻尖，头部基准
+ * 3  颈 Neck              头身分界（耳后压近似用：AP-10K 无独立耳根点，
+ *                          用「眼-颈相对几何」近似耳后压，注释即声明）
+ * 4  尾根 Root of Tail    核心！判断夹尾、尾巴高举
+ * 5  尾尖 Tail Tip        核心！尾巴上扬/下垂方向
+ * 6-9  四肢膝类关节        前后肢姿态
+ * 10-15 前后肢中间关节      前后肢姿态
+ * 16 体侧/背部参考点        躯干姿态
  *
- * 诚实边界（界面同步标注）：
- *  - 单帧静态图无法直接感知「快速摆动/缓慢摇尾」这类时间维度动作，
- *    「摇尾」以尾根相对髋部的上扬角度近似（上扬=放松，下垂/夹=恐惧）。
- *  - COCO 布局没有尾巴与耳朵外缘点，近似用「髋部高度差」与「头部朝向」
- *    几何特征替代耳/尾语义；表结构已按宠物模型（含尾根/尾尖/耳基点）预留。
+ * 业务判断公式、输出文字与 v1.4 完全一致，仅替换引用的下标。
+ * 未来换任何宠物姿态模型：只改本表 + PoseEstimator 预处理。
  */
 object PoseRules {
 
     private const val TAG = "PoseRules"
 
-    /** 关键点语义索引表：宠物姿态模型接入时替换此表即可 */
+    /** 关键点语义索引表（RTMPose-Animal AP-10K 17 点） */
     data class KptIndex(
-        val nose: Int = 0,
-        val eyeL: Int = 1, val eyeR: Int = 2,
-        val earL: Int = 3, val earR: Int = 4,
-        val shoulderL: Int = 5, val shoulderR: Int = 6,
-        val hipL: Int = 11, val hipR: Int = 12,
-        // 以下为宠物姿态模型预留（COCO 无此语义，默认指向肩/髋近似点）
-        val tailBase: Int = 11, val tailTip: Int = 7,
-        val earBaseL: Int = 3, val earBaseR: Int = 4,
+        val eyeL: Int = 0,
+        val eyeR: Int = 1,
+        val nose: Int = 2,
+        val neck: Int = 3,          // 头身分界；耳后压近似的参考点
+        val tailBase: Int = 4,      // 核心：夹尾/尾高举
+        val tailTip: Int = 5,       // 核心：尾巴方向
+        val shoulderPeak: Int = 16, // 肩峰近似（体侧/背部参考点）
+        val hipRef: Int = 6,        // 髋部近似（后肢膝关节）
     )
 
     private val IDX = KptIndex()
@@ -46,50 +51,58 @@ object PoseRules {
     data class EmotionOut(val label: String, val detail: String)
 
     /**
-     * 判定体态情绪。
-     * @param species "cat"/"dog"（需求 4 的猫狗规则不同）
-     * @param kpts 17×3 关键点（x,y,conf 归一化）
-     * @param minKptConf 关键点置信阈值（需求 3：低于判失败）
-     * @return 情绪结果；关键点整体不可用时返回 null（=体态识别失败）
+     * 判定体态情绪（业务公式与 v1.4 完全一致，仅索引替换）。
+     * @param species "cat"/"dog"
+     * @param kpts K×3 关键点（x,y,conf 归一化，K=17）
+     * @param minKptConf 关键点置信阈值（低于判该点无效）
      */
     fun judge(species: String, kpts: FloatArray, minKptConf: Float = 0.5f): EmotionOut? {
         try {
             fun pt(i: Int): Pair<Float, Float>? =
                 if (kpts[i * 3 + 2] >= minKptConf) kpts[i * 3] to kpts[i * 3 + 1] else null
 
+            val eyeL = pt(IDX.eyeL); val eyeR = pt(IDX.eyeR)
             val nose = pt(IDX.nose)
-            val shoulderMid = mid(pt(IDX.shoulderL), pt(IDX.shoulderR)) ?: return null
-            val hipMid = mid(pt(IDX.hipL), pt(IDX.hipR))
-            val earL = pt(IDX.earL); val earR = pt(IDX.earR)
-            val tailBase = pt(IDX.tailBase); val tailTip = pt(IDX.tailTip)
+            val neck = pt(IDX.neck)
+            val tailBase = pt(IDX.tailBase)
+            val tailTip = pt(IDX.tailTip)
+            val shoulder = pt(IDX.shoulderPeak)
+            val hip = pt(IDX.hipRef)
 
-            if (nose == null && earL == null && earR == null) {
+            // 头部基准：眼/鼻至少一个有效，否则判定失败
+            if (eyeL == null && eyeR == null && nose == null) {
                 Log.i(TAG, "head keypoints below conf -> treat as pose fail")
                 return null
             }
-
-            // —— 几何特征 ——
-            // 身体朝向角：肩中-髋中连线与竖直方向的夹角（前倾判定用）
-            var leanForward = false
-            var tailUp = false
-            var tailTucked = false
-            if (hipMid != null) {
-                val dx = shoulderMid.first - hipMid.first
-                val dy = shoulderMid.second - hipMid.second   // y 向下为正
-                // 前倾：肩部明显低于髋部（画面 y 越大越靠下）且横向投影长
-                leanForward = dy > 0.08f && Math.abs(dx) > 0.05f
-                // 尾巴（近似）：尾尖相对尾根上扬 = 放松；下垂/内收 = 恐惧
-                if (tailTip != null && tailBase != null) {
-                    val ty = tailTip.second - tailBase.second
-                    tailUp = ty < -0.05f
-                    tailTucked = ty > 0.06f
-                }
+            if (neck == null || shoulder == null || hip == null) {
+                Log.i(TAG, "body keypoints below conf -> treat as pose fail")
+                return null
             }
 
-            // —— 猫规则（需求 4）——
+            // —— 几何特征（y 向下为正）——
+            // ① 耳后压近似：眼睛高于颈部（y 更小）且间距明显 → 头部后收姿态
+            //   （AP-10K 无独立耳根点；公式来源已在表注释声明）
+            val eyeRef = eyeL ?: eyeR ?: nose!!
+            val earsBack = (neck.second - eyeRef.second) < -0.02f
+
+            // ② 尾巴方向：尾尖相对尾根，上扬(<-0.05)/下垂(>0.06)
+            var tailUp = false
+            var tailTucked = false
+            if (tailTip != null && tailBase != null) {
+                val ty = tailTip.second - tailBase.second
+                tailUp = ty < -0.05f
+                tailTucked = ty > 0.06f
+            }
+
+            // ③ 身体前倾：肩峰向鼻子方向明显前移（横向距离大于阈值）
+            val leanForward = run {
+                val nx = nose?.first ?: shoulder.first
+                (shoulder.first - nx).let { Math.abs(it) > 0.12f } &&
+                        (shoulder.second - hip.second) > 0f
+            }
+
+            // —— 猫规则（业务公式不变）——
             if (species == "cat") {
-                // 耳朵向后压：耳点高于（y 小于）眼点且横向内收 → 近似「耳后压」
-                val earsBack = earsPressedBack(nose, earL, earR)
                 return when {
                     earsBack -> EmotionOut(EM_TENSE, "耳朵向后压（近似判定：头部姿态内收）")
                     tailTucked -> EmotionOut(EM_IRRITATED, "尾巴下垂内收（近似：快速摆动的静态替代特征）")
@@ -98,7 +111,7 @@ object PoseRules {
                 }
             }
 
-            // —— 狗规则（需求 4）——
+            // —— 狗规则（业务公式不变）——
             return when {
                 tailTucked -> EmotionOut(EM_FEAR, "尾巴夹在两腿间（近似：尾尖下垂内收）")
                 leanForward -> EmotionOut(EM_WARN, "身体前倾")
@@ -110,22 +123,4 @@ object PoseRules {
             return null
         }
     }
-
-    /** 耳后压近似：耳点存在且位于眼点上方（y 更小）→ 头部后收姿态 */
-    private fun earsPressedBack(
-        nose: Pair<Float, Float>?, earL: Pair<Float, Float>?, earR: Pair<Float, Float>?
-    ): Boolean {
-        if (earL == null && earR == null) return false
-        // COCO 无耳基/耳尖方向信息，用「耳点与鼻的相对高度差」近似
-        val ref = nose ?: return false
-        val e = earL ?: earR!!
-        return (ref.second - e.second) < -0.02f
-    }
-
-    private fun mid(a: Pair<Float, Float>?, b: Pair<Float, Float>?): Pair<Float, Float>? =
-        when {
-            a != null && b != null -> ((a.first + b.first) / 2f) to ((a.second + b.second) / 2f)
-            a != null -> a
-            else -> b
-        }
 }

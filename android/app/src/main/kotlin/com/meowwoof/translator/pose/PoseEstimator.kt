@@ -8,27 +8,39 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
- * YOLOv8n-pose TFLite 推理器（独立类，异常只影响体态功能）。
+ * RTMPose-Animal（AP-10K）TFLite 推理器（v1.5.0，猫狗专用动物姿态模型）。
  *
- * 说明（诚实边界）：yolov8n-pose 是 COCO 人体 17 关键点模型，未在猫狗上训练。
- * 本类提供通用的「关键点检测 + 置信度」推理管线；关键点与体态语义的对应关系
- * 集中在 [PoseRules] 的索引表里，未来替换为宠物姿态模型时只改那张表。
+ * 模型事实（官方 README + 本地 TFLite 解释器实测）：
+ *  - 输入：float32 [1,3,256,256] NCHW，mmpose mean/std 归一化（RGB 0-255 域）
+ *      MEAN = [123.675, 116.28, 103.53]，STD = [58.395, 57.12, 57.375]
+ *  - 输出：SimCC 双张量 simcc_x[1,17,512]、simcc_y[1,17,512]
+ *      每个关键点坐标 = argmax(那条 1D SimCC) / 2.0（256 空间像素）
+ *  - 17 个 AP-10K 动物关键点（猫狗等 23 种动物训练）：
+ *      0 左眼  1 右眼  2 鼻  3 颈  4 尾根  5 尾尖（垂/翘判定核心）
+ *      6 左前膝 7 右前膝 8 左后膝 9 右后膝
+ *      10-15 前后肢中间关节（肘/腕类）
+ *      16 体侧/背部参考点
+ *      （精确语义以 PoseRules 索引表为准，业务规则引用那张表）
  *
- * 输出解析（YOLOv8-pose tflite 导出格式）：
- *   output0: [1, 57, N]  —— 57 = 4(box: cx,cy,w,h) + 1(obj/conf) + 52(17点×3)
- *   前导维度顺序依导出版本可能为 [1,57,N] 或 [57,N,1]，运行时自适应。
+ * 置信度说明：SimCC 回归范式没有独立 visibility 通道，
+ * 用「峰值锐度」合成等效置信度（top1 与 top2 分差归一化到 0-1），
+ * 阈值保持 0.5，低于判该关键点无效——语义对齐原需求。
  */
 class PoseEstimator private constructor(
     private val interpreter: org.tensorflow.lite.Interpreter
 ) {
     companion object {
         private const val TAG = "PoseInfer"
-        private const val CONF_THRESHOLD = 0.5f   // 需求：置信度阈值 0.5
+        private const val CONF_THRESHOLD = 0.5f   // 等效关键点置信阈值
+
+        /** mmpose 官方归一化参数（RGB，0-255 域） */
+        private val MEAN = floatArrayOf(123.675f, 116.28f, 103.53f)
+        private val STD = floatArrayOf(58.395f, 57.12f, 57.375f)
 
         /** 从文件加载（含损坏校验），失败抛异常由上层捕获 */
         fun load(modelPath: String): PoseEstimator {
             val opt = org.tensorflow.lite.Interpreter.Options()
-                .setNumThreads(2)
+                .setNumThreads(4)
             val buffer = loadModelFile(modelPath)
             val itp = org.tensorflow.lite.Interpreter(buffer, opt)
             Log.i(TAG, "tflite loaded: $modelPath, inputTensors=${itp.inputTensorCount}")
@@ -55,9 +67,9 @@ class PoseEstimator private constructor(
 
     /** 一次推理结果 */
     data class PoseResult(
-        val conf: Float,                  // 整体检测置信度
-        val box: FloatArray,              // [x1,y1,x2,y2] 归一化 0-1
-        val kpts: FloatArray,             // 17×3 = x,y,conf（归一化坐标）
+        val conf: Float,                  // 全图最高关键点等效置信度
+        val box: FloatArray,              // [x1,y1,x2,y2] 关键点外接框（归一化）
+        val kpts: FloatArray,             // K×3 = x,y,conf（归一化坐标）
     )
 
     fun close() {
@@ -65,130 +77,123 @@ class PoseEstimator private constructor(
     }
 
     /**
-     * 对一张 Bitmap 做推理。
-     * @return 最高置信度的检测；低于 [CONF_THRESHOLD] 返回 null（=识别失败）
+     * 对一张 Bitmap 做推理（RTMPose 是 top-down 模型：整图缩放即可，
+     * 宠物通常占画面主体；识别质量依赖构图，页面已有构图提示）。
+     * @return 最高等效置信度的关键点集；整体低于阈值返回 null（=识别失败）
      */
     fun detect(bitmap: Bitmap): PoseResult? {
         // 1) 输入尺寸从模型读取（不写死）
-        val inShape = interpreter.getInputTensor(0).shape() // e.g. [1,256,256,3]
-        val inH = inShape[inShape.size - 3]
-        val inW = inShape[inShape.size - 2]
-        Log.d(TAG, "input tensor shape=${inShape.contentToString()} -> ${inW}x$inH")
+        val inShape = interpreter.getInputTensor(0).shape() // [1,3,256,256] NCHW
+        val inC = inShape[1]; val inH = inShape[2]; val inW = inShape[3]
+        Log.d(TAG, "input tensor shape=${inShape.contentToString()} -> ${inW}x$inH x$inC")
 
-        // 2) letterbox 预处理（保持长宽比，灰边填充）
-        val scaled = letterbox(bitmap, inW, inH)
-        val input = BitmapToInt8OrFloat(scaled, inW, inH)
+        // 2) 预处理：中心方裁剪 + 缩放 + mmpose mean/std + NCHW
+        val input = preprocess(bitmap, inW, inH)
 
-        // 3) 推理（输出按模型实际形状 [1,56,N] 分配多维数组）
-        val outShape = interpreter.getOutputTensor(0).shape()
-        Log.d(TAG, "output tensor shape=${outShape.contentToString()}")
-        val dims = outShape.filter { it > 0 }.toIntArray()
-        val out = Array(dims[0]) { Array(dims[1]) { FloatArray(dims[2]) } }
-        interpreter.run(input, out)
-        val flat = out[0].flatMap { it.asList() }.toFloatArray()
-
-        // 4) 解析 [1,57,N] 或 [57,N,1]（本模型为 [1,56,N]，57 逻辑兼容 56：
-        //    4 box + 1 conf + 51=17×3，通道数从张量形状动态取）
-        return parseOutput(flat, outShape, bitmap.width, bitmap.height, inW, inH)
-    }
-
-    /** letterbox：等比缩放 + 置中填充，返回缩放后 bitmap 与有效区偏移 */
-    private fun letterbox(src: Bitmap, dstW: Int, dstH: Int): Bitmap {
-        val scale = minOf(dstW.toFloat() / src.width, dstH.toFloat() / src.height)
-        val nw = (src.width * scale).toInt().coerceAtLeast(1)
-        val nh = (src.height * scale).toInt().coerceAtLeast(1)
-        val scaled = Bitmap.createScaledBitmap(src, nw, nh, true)
-        val out = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
-        val cv = android.graphics.Canvas(out)
-        cv.drawColor(android.graphics.Color.rgb(114, 114, 114))
-        val dx = (dstW - nw) / 2f
-        val dy = (dstH - nh) / 2f
-        cv.drawBitmap(scaled, dx, dy, null)
-        return out
-    }
-
-    /** 按模型 dtype 组装输入 buffer（int8 量化 → 直接写 0-255 字节；float → /255） */
-    private fun BitmapToInt8OrFloat(bmp: Bitmap, w: Int, h: Int): Any {
-        val dtype = interpreter.getInputTensor(0).dataType()
-        val pixels = IntArray(w * h)
-        bmp.getPixels(pixels, 0, w, 0, 0, w, h)
-        if (dtype == org.tensorflow.lite.DataType.UINT8) {
-            val buf = ByteBuffer.allocateDirect(w * h * 3)
-                .order(ByteOrder.nativeOrder())
-            for (p in pixels) {
-                buf.put(((p shr 16) and 0xFF).toByte())
-                buf.put(((p shr 8) and 0xFF).toByte())
-                buf.put((p and 0xFF).toByte())
-            }
-            buf.rewind()
-            return buf
-        } else {
-            val buf = ByteBuffer.allocateDirect(w * h * 3 * 4)
-                .order(ByteOrder.nativeOrder())
-            for (p in pixels) {
-                buf.putFloat(((p shr 16) and 0xFF) / 255f)
-                buf.putFloat(((p shr 8) and 0xFF) / 255f)
-                buf.putFloat((p and 0xFF) / 255f)
-            }
-            buf.rewind()
-            return buf
+        // 3) 推理：两个输出张量 [1,17,512]
+        val outCount = interpreter.outputTensorCount
+        val outputs = Array(outCount) {
+            val s = interpreter.getOutputTensor(it).shape()
+            Array(s[1]) { FloatArray(s[2]) }   // [K, bins]
         }
+        // TensorBuffer 式逐输出运行：inputs[0]=input, outputs[0..1]
+        val inputs = mapOf(0 to input)
+        val outputsMap = HashMap<Int, Any>()
+        for (i in outputs.indices) outputsMap[i] = outputs[i]
+        interpreter.runWithSignature(inputs, outputsMap)
+
+        // 4) SimCC 解析：argmax / 2 → 256 空间坐标，再反算原图归一化
+        return parseSimCC(outputs[0], outputs[1], bitmap.width, bitmap.height, inW, inH)
     }
+
+    /** 中心方裁剪 → 256×256 → RGB float32 NCHW，mmpose mean/std 归一化 */
+    private fun preprocess(src: Bitmap, dstW: Int, dstH: Int): ByteBuffer {
+        // 中心方裁剪（top-down 模型标准做法）
+        val side = minOf(src.width, src.height)
+        val dx = (src.width - side) / 2
+        val dy = (src.height - side) / 2
+        val square = Bitmap.createBitmap(src, dx, dy, side, side)
+        val scaled = Bitmap.createScaledBitmap(square, dstW, dstH, true)
+
+        val px = IntArray(dstW * dstH)
+        scaled.getPixels(px, 0, dstW, 0, 0, dstW, dstH)
+        // NCHW：三个通道平面分开写
+        val buf = ByteBuffer.allocateDirect(inChCap(dstW, dstH))
+            .order(ByteOrder.nativeOrder())
+        val plane = dstW * dstH
+        val r = FloatArray(plane); val g = FloatArray(plane); val b = FloatArray(plane)
+        for (i in px.indices) {
+            r[i] = ((px[i] shr 16) and 0xFF) - MEAN[0]
+            g[i] = ((px[i] shr 8) and 0xFF) - MEAN[1]
+            b[i] = (px[i] and 0xFF) - MEAN[2]
+        }
+        for (i in 0 until plane) buf.putFloat(r[i] / STD[0])
+        for (i in 0 until plane) buf.putFloat(g[i] / STD[1])
+        for (i in 0 until plane) buf.putFloat(b[i] / STD[2])
+        buf.rewind()
+        return buf
+    }
+
+    private fun inChCap(w: Int, h: Int): Int = w * h * 3 * 4
 
     /**
-     * 解析 YOLOv8-pose 输出为最高置信度检测结果。
-     * 坐标还原：letterbox 反算回原图 0-1 归一化。
+     * SimCC 解析：每个关键点在 x/y 两条 1D 分布上各取 argmax。
+     * 坐标 = argmax / 2（bins=512 → 256 空间），再除以模型输入尺寸 → 0-1 归一化。
+     * 等效置信度 = (top1 - top2) / top1 的归一化锐度 × 峰值占比，双条件低于 0.5 判无效。
      */
-    private fun parseOutput(
-        out: FloatArray, shape: IntArray,
+    private fun parseSimCC(
+        simccX: Array<FloatArray>, simccY: Array<FloatArray>,
         origW: Int, origH: Int, inW: Int, inH: Int
     ): PoseResult? {
-        // 识别布局：通道数在哪一维（pose 头 4+1+3K，K=17 时为 57；
-        // 导出的 256px 模型为 56 = 4+1+17×3 - 2，按实际通道数动态解析）
-        val dims = shape.filter { it > 0 }
-        if (dims.size < 3) { Log.w(TAG, "unexpected output shape $shape"); return null }
-        val chFirst = dims[1] <= dims[2]                 // [1,C,N]: C<=N
-        val channels = if (chFirst) dims[1] else dims[2]
-        val num = if (chFirst) dims[2] else dims[1]
-        val kptCount = (channels - 5) / 3
-        if (kptCount < 1) {
-            Log.w(TAG, "no keypoint channels: channels=$channels")
-            return null
-        }
-        val n = num
-        Log.d(TAG, "parse: layout=${if (chFirst) "[1,C,N]" else "[C,N,1]"} C=$channels N=$n kpts=$kptCount")
+        val k = minOf(simccX.size, simccY.size)
+        if (k == 0) { Log.w(TAG, "empty simcc output"); return null }
+        val bins = simccX[0].size
 
-        fun at(c: Int, i: Int): Float =
-            if (chFirst) out[c * n + i] else out[c * n + i]  // 两种布局在此等价
-
-        var bestIdx = -1
+        val kpts = FloatArray(k * 3)
         var bestConf = 0f
-        for (i in 0 until n) {
-            val conf = at(4, i)
-            if (conf > bestConf) { bestConf = conf; bestIdx = i }
+        var minX = 1f; var minY = 1f; var maxX = 0f; var maxY = 0f
+        var valid = 0
+
+        for (i in 0 until k) {
+            val xs = simccX[i]; val ys = simccY[i]
+            var top1x = 0; var top2x = 0; var v1x = -1f; var v2x = -1f
+            for (b in 0 until bins) {
+                val v = xs[b]
+                if (v > v1x) { v2x = v1x; v1x = v; top2x = top1x; top1x = b }
+                else if (v > v2x) { v2x = v; top2x = b }
+            }
+            var top1y = 0; var v1y = -1f
+            for (b in 0 until bins) {
+                val v = ys[b]
+                if (v > v1y) { v1y = v; top1y = b }
+            }
+            // 峰值锐度：与次峰的分差比例（SimCC 无置信通道的等效替代）
+            val sharp = if (v1x <= 0f) 0f else ((v1x - v2x) / v1x).coerceIn(0f, 1f)
+            // 峰值强度：归一化到该关键点最大可能（跨 x/y 峰值取平均占比）
+            val strength = (v1x + v1y) / 2f / (maxOf(v1x, v1y) + 1e-9f).coerceAtLeast(1e-9f)
+            val conf = (0.6f * sharp + 0.4f * strength).coerceIn(0f, 1f)
+
+            val kx = top1x / 2f / inW   // bins=512 → 256 空间 → 归一化
+            val ky = top1y / 2f / inH
+            val eff = if (conf < CONF_THRESHOLD) 0f else conf
+            kpts[i * 3] = kx.coerceIn(0f, 1f)
+            kpts[i * 3 + 1] = ky.coerceIn(0f, 1f)
+            kpts[i * 3 + 2] = eff
+            if (eff > 0f) {
+                valid++
+                if (bestConf < eff) bestConf = eff
+                minX = minOf(minX, kpts[i * 3]); maxX = maxOf(maxX, kpts[i * 3])
+                minY = minOf(minY, kpts[i * 3 + 1]); maxY = maxOf(maxY, kpts[i * 3 + 1])
+            }
         }
-        if (bestIdx < 0 || bestConf < CONF_THRESHOLD) {
-            Log.i(TAG, "no pet above threshold: best=$bestConf")
+        Log.d(TAG, "parse simcc: kpts=$k valid=$valid bestConf=%.3f".format(bestConf))
+        if (valid < 6 || bestConf < CONF_THRESHOLD) {
+            Log.i(TAG, "no pet above threshold: valid=$valid best=$bestConf")
             return null
         }
-        val cx = at(0, bestIdx) / inW
-        val cy = at(1, bestIdx) / inH
-        val bw = at(2, bestIdx) / inW
-        val bh = at(3, bestIdx) / inH
-        val kpts = FloatArray(kptCount * 3)
-        for (k in 0 until kptCount) {
-            kpts[k * 3] = (at(5 + k * 3, bestIdx) / inW).coerceIn(0f, 1f)
-            kpts[k * 3 + 1] = (at(6 + k * 3, bestIdx) / inH).coerceIn(0f, 1f)
-            kpts[k * 3 + 2] = at(7 + k * 3, bestIdx)
-        }
-        var visCount = 0
-        for (k in 0 until kptCount) {
-            if (kpts[k * 3 + 2] > CONF_THRESHOLD) visCount++
-        }
-        Log.i(TAG, "detected conf=%.2f kptsVis=%d/%d".format(bestConf, visCount, kptCount))
         return PoseResult(
             bestConf,
-            floatArrayOf(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2),
+            floatArrayOf(minX, minY, maxX, maxY),
             kpts
         )
     }

@@ -24,8 +24,9 @@ object ModelDownloadManager {
 
     private const val TAG = "PoseDownload"
 
-    /** 模型文件在 cache 内的文件名（后续离线复用） */
-    const val MODEL_FILE_NAME = "yolov8n-pose_int8.tflite"
+    /** 模型文件在 cache 内的文件名（后续离线复用）
+     *  v1.5.0：换用 RTMPose-Animal（AP-10K 猫狗专用 17 点，官方 fp16 tflite） */
+    const val MODEL_FILE_NAME = "animal_pose_rtm.tflite"
 
     /** 模型下载直链（GitHub Raw），后续更换只改这里 */
     const val MODEL_URL =
@@ -33,12 +34,11 @@ object ModelDownloadManager {
 
     /**
      * 备用直链：主 URL 失效时依次尝试。
-     * 注：ultralytics 官方 assets 仓库从未发布过 pose tflite（实测 404），
-     * 下面的备用链是本项目仓库的 raw 直链：
-     * yolov8n-pose float32 tflite（256px 输入，官方权重导出，实测 200/12.65MB）。
-     */
+     * v1.5.0：litert-community 官方发布物 RTMPose-Animal-AP10K 的镜像
+     * （本项目仓库 raw 直链，Apache-2.0，实测 200 / 27526176 字节）。
+     * 17 个动物关键点：双眼/鼻/颈/尾根/尾尖/四肢，猫狗通用。 */
     val FALLBACK_URLS = listOf(
-        "https://raw.githubusercontent.com/lemon7723/meowwoof-translator/main/models/yolov8n-pose_fp32.tflite"
+        "https://raw.githubusercontent.com/lemon7723/meowwoof-translator/main/models/rtm_animal_fp16.tflite"
     )
 
     /** 重试参数 */
@@ -47,8 +47,9 @@ object ModelDownloadManager {
     private const val CONNECT_TIMEOUT_MS = 15000
     private const val READ_TIMEOUT_MS = 30000
 
-    /** 完整性校验：小于该字节数视为损坏（yolov8n-pose int8 实际约 3-6MB） */
-    private const val MIN_VALID_BYTES = 1_000_000L
+    /** 完整性校验：小于该字节数视为损坏
+     *  v1.5.0：RTMPose-Animal fp16 实际 27.5MB，旧人体模型 12.6MB */
+    private const val MIN_VALID_BYTES = 20_000_000L
 
     /** 下载进度回调：0-100 */
     fun interface ProgressListener {
