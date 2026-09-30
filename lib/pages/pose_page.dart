@@ -672,7 +672,6 @@ class _PosePageState extends State<PosePage> {
         label: Text(installed
             ? app.label.replaceFirst('Share to ', '')
             : 'App not installed'),
-        tooltip: installed ? null : 'App not installed',
       ),
     );
   }

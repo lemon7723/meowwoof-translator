@@ -105,6 +105,20 @@ class AppSettings {
     this.deviceTier,
   });
 
+  /// 拷贝并可选覆写部分字段
+  AppSettings copyWith({
+    bool? postureEnabled,
+    bool? deviceTierAcked,
+    bool? forcePosture,
+    String? deviceTier,
+  }) =>
+      AppSettings(
+        postureEnabled: postureEnabled ?? this.postureEnabled,
+        deviceTierAcked: deviceTierAcked ?? this.deviceTierAcked,
+        forcePosture: forcePosture ?? this.forcePosture,
+        deviceTier: deviceTier ?? this.deviceTier,
+      );
+
   Map<String, Object?> toMap() => {
         'postureEnabled': postureEnabled,
         'deviceTierAcked': deviceTierAcked,

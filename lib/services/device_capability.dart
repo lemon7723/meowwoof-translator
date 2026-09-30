@@ -10,6 +10,8 @@
 /// device_info_plus 的型号字符串做关键词兜底解析。
 library;
 
+import 'dart:io';
+
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/services.dart';
 
@@ -74,14 +76,16 @@ class DeviceCapability {
   static Future<DeviceInfoResult> _detectFallback() async {
     try {
       final di = DeviceInfoPlugin();
-      if (await di.isAndroid) {
+      if (Platform.isAndroid) {
         final a = await di.androidInfo;
-        final soc = '${a.socModel} ${a.board} ${a.hardware} ${a.model}'
-            .toLowerCase();
-        final ramMb = (a.physicalMemoryInBytes ~/ (1024 * 1024));
+        // device_info_plus 10.x 无 socModel（11+ 才有），用 board/hardware/model 兜底
+        final soc = '${a.board} ${a.hardware} ${a.model}'.toLowerCase();
+        // device_info_plus 10.x 无 physicalMemoryInBytes；Dart 兜底拿不到内存时给 0
+        // （真实 RAM 由原生 DeviceCapability 通道补全，此处仅作降级估计）
+        const ramMb = 0;
         return DeviceInfoResult(
           tier: _tierFromSocString(soc, ramMb),
-          chip: a.socModel.isNotEmpty ? a.socModel : a.board,
+          chip: a.board.isNotEmpty ? a.board : a.model,
           ramMb: ramMb,
           fromNative: false,
         );
