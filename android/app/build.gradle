@@ -26,6 +26,14 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
+
+        // v1.6.0：默认同时打包 arm64-v8a（真机）+ x86_64（雷电/安卓模拟器）。
+        // 纯 arm 的 APK 在 LDPlayer 等 x86_64 模拟器上会 INSTALL_FAILED_NO_MATCHING_ABIS。
+        // 只留这两个 ABI，配合 `flutter build apk --release --split-per-abi` 正好出"两个包"：
+        //   app-arm64-v8a-release.apk（真机测试）+ app-x86_64-release.apk（模拟器测试）。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {

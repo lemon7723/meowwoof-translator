@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "meowwoof/voice"
-        private const val BUILD_TAG = "v1.5.9"
+        private const val BUILD_TAG = "v1.6.0"
         private const val SAMPLE_RATE = 16000
         private const val PERM_REQ = 2001
         private const val MAX_REC_SECONDS = 120
@@ -71,11 +71,91 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+
         // v1.4.0 新增：体态识别独立 channel（不触碰下方语音/播放任何现有逻辑）
-        com.meowwoof.translator.pose.PoseChannel.register(
-            this, flutterEngine.dartExecutor.binaryMessenger
-        )
-        channelRef = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        com.meowwoof.translator.pose.PoseChannel.register(this, messenger)
+
+        // v1.6.0 新增：设备分级检测（需求 6）
+        MethodChannel(messenger, "meowwoof/device").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "detect" -> result.success(
+                    com.meowwoof.translator.pose.DeviceCapability.detect(this))
+                else -> result.notImplemented()
+            }
+        }
+
+        // v1.6.0 新增：多平台一键分享（需求 9）
+        MethodChannel(messenger, "meowwoof/share").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "checkInstalled" -> {
+                    val pkgs = (call.argument<List<*>>("packages") ?: emptyList())
+                        .mapNotNull { it?.toString() }
+                    result.success(
+                        com.meowwoof.translator.pose.ShareManager
+                            .checkInstalled(this, pkgs))
+                }
+                "shareTo" -> {
+                    val pkg = call.argument<String>("package") ?: ""
+                    val path = call.argument<String>("path") ?: ""
+                    result.success(
+                        com.meowwoof.translator.pose.ShareManager
+                            .shareTo(this, pkg, path))
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // v1.6.0 新增：相机捕获 + 实时姿态 + 音画录像 + 边录边叫（需求 4/8/8.1）
+        val captureChannel = MethodChannel(messenger, "meowwoof/capture")
+        com.meowwoof.translator.pose.CameraRecorder.attachEventChannel(captureChannel)
+        captureChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "open" -> {
+                    val postureEnabled = call.argument<Boolean>("postureEnabled") ?: true
+                    val isA13 = call.argument<Boolean>("isA13") ?: false
+                    result.success(
+                        com.meowwoof.translator.pose.CameraRecorder.open(
+                            this, postureEnabled, isA13))
+                }
+                "close" -> {
+                    com.meowwoof.translator.pose.CameraRecorder.close()
+                    result.success(null)
+                }
+                "startPosture" -> {
+                    com.meowwoof.translator.pose.CameraRecorder.startPosture()
+                    result.success(null)
+                }
+                "stopPosture" -> {
+                    com.meowwoof.translator.pose.CameraRecorder.stopPosture()
+                    result.success(null)
+                }
+                "startRecord" -> result.success(
+                    com.meowwoof.translator.pose.CameraRecorder.startRecord())
+                "stopRecord" -> result.success(
+                    com.meowwoof.translator.pose.CameraRecorder.stopRecord())
+                "playCall" -> {
+                    val asset = call.argument<String>("asset") ?: ""
+                    val rate = (call.argument<Double>("rate") ?: 1.0).toFloat()
+                    com.meowwoof.translator.pose.CameraRecorder.playCall(asset, rate)
+                    result.success(null)
+                }
+                "stopCall" -> {
+                    com.meowwoof.translator.pose.CameraRecorder.stopCall()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // v1.6.0 新增：相机预览 PlatformView（viewType = meowwoof/camera_preview）
+        flutterEngine.platformViewsController.registry
+            .registerViewFactory(
+                "meowwoof/camera_preview",
+                com.meowwoof.translator.pose.CameraPreviewFactory())
+
+        // —— 原语音/播放通道（保持不变）——
+        channelRef = MethodChannel(messenger, CHANNEL)
         channelRef?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "buildVersion" -> result.success(BUILD_TAG)

@@ -3,55 +3,59 @@ package com.meowwoof.translator.pose
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * 体态模型下载管理器（独立于语音/播放模块，任何异常只影响体态功能）。
  *
- * 职责：
- *  1. 检查私有 cache 是否已有模型 → 离线复用
- *  2. 依次尝试 MODEL_URL / FALLBACK_URLS，下载到 cacheDir
- *  3. 下载进度回调（0-100），UI 展示百分比
- *  4. 重试：每条 URL 最多 3 次，间隔 2 秒
- *  5. 断点续传：Range 头 + .part 临时文件
- *  6. 完成后校验文件大小下限，防止损坏/半截文件；再加 TFLite 试加载校验
+ * v1.6.0：模型换用 SuperAnimal HRNet-w32（INT8 量化，24 关键点，54.6MB，Apache-2.0）。
+ * 模型不打包进 APK；首次进入 Pet Mood Capture 才远端下载并本地 cache 持久缓存。
  *
- * 日志 TAG：PoseDownload（关键步骤全打点，方便调试）
+ * 下载策略（需求 2）：
+ *  - MODEL_URL 主地址 + FALLBACK_URLS 备用链
+ *  - 每条 URL 最多 3 次重试，间隔 2 秒
+ *  - 百分比进度 UI 展示（回调 0-100）
+ *  - 断点续传（Range 头 + .part 临时文件）
+ *  - 完成后 SHA-256 哈希校验（EXPECTED_SHA256 留空时跳过，托管后填入即生效）
+ *  - 再加 TFLite 试加载校验（损坏文件当场删除）
+ *
+ * ⚠️ 你需把 HRNet-w32 INT8 的 TFLite 文件托管到可直链下载的地址，并把真实
+ *    SHA-256 填入 EXPECTED_SHA256（留空则仅做大小 + 试加载校验）。
  */
 object ModelDownloadManager {
 
     private const val TAG = "PoseDownload"
 
-    /** 模型文件在 cache 内的文件名（后续离线复用）
-     *  v1.5.0：换用 RTMPose-Animal（AP-10K 猫狗专用 17 点，官方 fp16 tflite） */
-    const val MODEL_FILE_NAME = "animal_pose_rtm.tflite"
+    /** 模型文件名（cache 内，后续离线复用） */
+    const val MODEL_FILE_NAME = "superanimal_hrnet_w32_int8.tflite"
 
-    /** 模型下载直链（GitHub Raw），后续更换只改这里 */
+    /** 模型下载主地址（HRNet-w32 INT8，54.6MB）。替换为你的托管直链。 */
     const val MODEL_URL =
-        "https://raw.githubusercontent.com/ultralytics/assets/main/models/yolov8n-pose_int8.tflite"
+        "https://github.com/your-org/meowwoof-models/raw/main/superanimal_hrnet_w32_int8.tflite"
 
-    /**
-     * 备用直链：主 URL 失效时依次尝试。
-     * v1.5.0：litert-community 官方发布物 RTMPose-Animal-AP10K 的镜像
-     * （本项目仓库 raw 直链，Apache-2.0，实测 200 / 27526176 字节）。
-     * 17 个动物关键点：双眼/鼻/颈/尾根/尾尖/四肢，猫狗通用。 */
+    /** 备用直链，主地址失效时依次尝试 */
     val FALLBACK_URLS = listOf(
-        "https://raw.githubusercontent.com/lemon7723/meowwoof-translator/main/models/rtm_animal_fp16.tflite"
+        "https://raw.githubusercontent.com/your-org/meowwoof-models/main/superanimal_hrnet_w32_int8.tflite"
     )
 
-    /** 重试参数 */
+    /**
+     * 期望的 SHA-256（hex，小写）。填入后做强校验；留空仅做大小 + 试加载校验。
+     * 计算方式（本地）：sha256sum superanimal_hrnet_w32_int8.tflite
+     */
+    const val EXPECTED_SHA256 = ""
+
     private const val MAX_RETRIES = 3
     private const val RETRY_DELAY_MS = 2000L
     private const val CONNECT_TIMEOUT_MS = 15000
     private const val READ_TIMEOUT_MS = 30000
 
-    /** 完整性校验：小于该字节数视为损坏
-     *  v1.5.0：RTMPose-Animal fp16 实际 27.5MB，旧人体模型 12.6MB */
-    private const val MIN_VALID_BYTES = 20_000_000L
+    /** 完整性下限（HRNet-w32 INT8 ≈ 54.6MB，低于视为损坏） */
+    private const val MIN_VALID_BYTES = 40_000_000L
 
-    /** 下载进度回调：0-100 */
     fun interface ProgressListener {
         fun onProgress(percent: Int)
     }
@@ -59,10 +63,13 @@ object ModelDownloadManager {
     fun modelFile(ctx: Context): File =
         File(ctx.cacheDir, MODEL_FILE_NAME)
 
-    /** 缓存内是否已有通过校验的模型 */
     fun hasValidCachedModel(ctx: Context): Boolean {
         val f = modelFile(ctx)
         if (!f.exists() || f.length() < MIN_VALID_BYTES) return false
+        if (EXPECTED_SHA256.isNotEmpty() && !verifySha256(f, EXPECTED_SHA256)) {
+            Log.w(TAG, "cached model sha256 mismatch, delete")
+            f.delete(); return false
+        }
         return try {
             PoseEstimator.validateModel(f.absolutePath)
         } catch (t: Throwable) {
@@ -71,10 +78,6 @@ object ModelDownloadManager {
         }
     }
 
-    /**
-     * 确保模型就绪：有缓存直接返回；否则下载。
-     * @throws PoseDownloadException 全部 URL 重试后仍失败时抛出（调用方 catch 后禁用体态功能）
-     */
     @Synchronized
     fun ensureModel(ctx: Context, listener: ProgressListener): File {
         if (hasValidCachedModel(ctx)) {
@@ -92,14 +95,15 @@ object ModelDownloadManager {
                     if (f.length() < MIN_VALID_BYTES) {
                         throw IOException("file too small: ${f.length()} bytes")
                     }
-                    // 试加载校验：损坏文件当场删除，进入下一次重试
+                    if (EXPECTED_SHA256.isNotEmpty() && !verifySha256(f, EXPECTED_SHA256)) {
+                        throw IOException("sha256 mismatch")
+                    }
                     PoseEstimator.validateModel(f.absolutePath)
                     Log.i(TAG, "download OK: ${f.length()} bytes -> ${f.absolutePath}")
                     return f
                 } catch (t: Throwable) {
                     lastErr = t
                     Log.w(TAG, "attempt $attempt failed: ${t.javaClass.simpleName}: ${t.message}")
-                    // 删除半截文件，保留续传基线（.part 不删）
                     try { modelFile(ctx).delete() } catch (_: Exception) {}
                     if (attempt < MAX_RETRIES) {
                         try { Thread.sleep(RETRY_DELAY_MS) } catch (_: InterruptedException) {}
@@ -110,7 +114,6 @@ object ModelDownloadManager {
         throw PoseDownloadException("all URLs failed after $MAX_RETRIES retries", lastErr)
     }
 
-    /** 断点续传下载：先探测已有 .part 长度，带 Range 头请求 */
     private fun downloadWithResume(
         ctx: Context, urlStr: String, listener: ProgressListener
     ): File {
@@ -128,7 +131,6 @@ object ModelDownloadManager {
                 Log.d(TAG, "resume from $downloaded bytes")
             }
             val code = conn.responseCode
-            // 服务器不支持 Range 时从头下
             val resuming = (code == 206)
             if (code != 200 && code != 206) {
                 throw IOException("HTTP $code for $urlStr")
@@ -160,7 +162,6 @@ object ModelDownloadManager {
                     }
                 }
             }
-            // 下载完成：.part → 正式文件
             if (finalFile.exists()) finalFile.delete()
             if (!partFile.renameTo(finalFile)) {
                 partFile.copyTo(finalFile, overwrite = true)
@@ -171,8 +172,26 @@ object ModelDownloadManager {
             try { conn.disconnect() } catch (_: Exception) {}
         }
     }
+
+    /** SHA-256 校验（与 EXPECTED_SHA256 比对） */
+    private fun verifySha256(file: File, expected: String): Boolean {
+        return try {
+            val md = MessageDigest.getInstance("SHA-256")
+            FileInputStream(file).use { fis ->
+                val buf = ByteArray(256 * 1024)
+                var n: Int
+                while (fis.read(buf).also { n = it } > 0) md.update(buf, 0, n)
+            }
+            val hex = md.digest().joinToString("") { "%02x".format(it) }
+            val ok = hex.equals(expected, ignoreCase = true)
+            if (!ok) Log.w(TAG, "sha256 mismatch: got $hex expected $expected")
+            ok
+        } catch (t: Throwable) {
+            Log.e(TAG, "sha256 calc failed: ${t.message}")
+            false
+        }
+    }
 }
 
-/** 下载失败（网络不通/全部重试失败） */
 class PoseDownloadException(message: String, cause: Throwable? = null)
     : Exception(message, cause)

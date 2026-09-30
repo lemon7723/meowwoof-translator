@@ -8,46 +8,67 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
- * RTMPose-Animal（AP-10K）TFLite 推理器（v1.5.0，猫狗专用动物姿态模型）。
+ * SuperAnimal HRNet-w32（INT8 量化）TFLite 推理器（v1.6.0）。
  *
- * 模型事实（官方 README + 本地 TFLite 解释器实测）：
- *  - 输入：float32 [1,3,256,256] NCHW，mmpose mean/std 归一化（RGB 0-255 域）
- *      MEAN = [123.675, 116.28, 103.53]，STD = [58.395, 57.12, 57.375]
- *  - 输出：SimCC 双张量 simcc_x[1,17,512]、simcc_y[1,17,512]
- *      每个关键点坐标 = argmax(那条 1D SimCC) / 2.0（256 空间像素）
- *  - 17 个 AP-10K 动物关键点（猫狗等 23 种动物训练）：
- *      0 左眼  1 右眼  2 鼻  3 颈  4 尾根  5 尾尖（垂/翘判定核心）
- *      6 左前膝 7 右前膝 8 左后膝 9 右后膝
- *      10-15 前后肢中间关节（肘/腕类）
- *      16 体侧/背部参考点
- *      （精确语义以 PoseRules 索引表为准，业务规则引用那张表）
+ * 替换原 RTMPose-Animal（AP-10K 17 点 SimCC）。HRNet 输出关键点热力图，
+ * 解析方式由 SimCC → 高斯热力图 argmax（含 1/4 像素精修）。
  *
- * 置信度说明：SimCC 回归范式没有独立 visibility 通道，
- * 用「峰值锐度」合成等效置信度（top1 与 top2 分差归一化到 0-1），
- * 阈值保持 0.5，低于判该关键点无效——语义对齐原需求。
+ * ★ 关键假设（需与最终导出的 HRNet-w32 TFLite 模型严格对齐）：
+ *   - 输入：float32 [1,3,H,W]（NCHW），H=W=256（从模型读取，不写死）。
+ *     预处理：中心方裁剪 → resize → ImageNet 风格归一化（mean/std 见下）。
+ *   - 输出：单张热力图张量 [1, K, outH, outW]（K=24 个关键点，outH=outW=64）。
+ *     若模型导出为「热力图 + 偏移」双输出（offset 形状 [1, K*2, outH, outW]），
+ *     则启用 1/4 像素精修（offset 分支按存在性自动启用）。
+ *   - 关键点顺序（24 点，本 App 业务侧唯一权威索引，PoseRules.kt 引用此表）：
+ *       0 鼻 nose           1 左眼 left_eye       2 右眼 right_eye
+ *       3 左耳根 left_ear   4 右耳根 right_ear     5 左耳尖 left_ear_tip
+ *       6 右耳尖 right_ear_tip
+ *       7 左前肩 l_shoulder 8 右前肩 r_shoulder
+ *       9 左前肘 l_front_elbow 10 右前肘 r_front_elbow
+ *       11 左前爪 l_front_paw 12 右前爪 r_front_paw
+ *       13 左后髋 l_hip     14 右后髋 r_hip
+ *       15 左后膝 l_back_knee 16 右后膝 r_back_knee
+ *       17 左后爪 l_back_paw 18 右后爪 r_back_paw
+ *       19 脊柱中段 spine（背线中点） 20 尾根 tail_base 21 尾中 tail_mid
+ *       22 尾尖 tail_tip    23 颈 neck
+ *
+ *   ⚠️ 导出模型的关键点顺序若与上表不同，只需改本文件的 KPT_NAMES 顺序与
+ *      PoseRules 的索引常量，业务判定公式无需变动。
+ *
+ *   - 置信度：取该点热力图峰值（0-1）。INT8 模型经 TFLite 自动反量化后返回 float。
+ *     阈值 0.3（低于该值的点判无效，不参与判定）。
  */
 class PoseEstimator private constructor(
     private val interpreter: org.tensorflow.lite.Interpreter
 ) {
     companion object {
         private const val TAG = "PoseInfer"
-        private const val CONF_THRESHOLD = 0.5f   // 等效关键点置信阈值
+        const val K = 24                       // 关键点数量
+        private const val CONF_THRESHOLD = 0.3f // 关键点置信阈值
 
-        /** mmpose 官方归一化参数（RGB，0-255 域） */
-        private val MEAN = floatArrayOf(123.675f, 116.28f, 103.53f)
-        private val STD = floatArrayOf(58.395f, 57.12f, 57.375f)
+        /** ImageNet 归一化参数（HRNet 主干通常为 ImageNet 预训练） */
+        private val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
+        private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
+        private const val SCALE_0_1 = 255f
 
-        /** 从文件加载（含损坏校验），失败抛异常由上层捕获 */
+        /** 24 关键点名称（顺序即模型输出顺序，业务侧引用） */
+        val KPT_NAMES = arrayOf(
+            "nose", "eye_l", "eye_r", "ear_base_l", "ear_base_r",
+            "ear_tip_l", "ear_tip_r", "shoulder_l", "shoulder_r",
+            "elbow_l", "elbow_r", "paw_front_l", "paw_front_r",
+            "hip_l", "hip_r", "knee_back_l", "knee_back_r",
+            "paw_back_l", "paw_back_r", "spine", "tail_base",
+            "tail_mid", "tail_tip", "neck"
+        )
+
         fun load(modelPath: String): PoseEstimator {
-            val opt = org.tensorflow.lite.Interpreter.Options()
-                .setNumThreads(4)
+            val opt = org.tensorflow.lite.Interpreter.Options().setNumThreads(4)
             val buffer = loadModelFile(modelPath)
             val itp = org.tensorflow.lite.Interpreter(buffer, opt)
-            Log.i(TAG, "tflite loaded: $modelPath, inputTensors=${itp.inputTensorCount}")
+            Log.i(TAG, "HRNet tflite loaded: $modelPath, inputs=${itp.inputTensorCount}, outputs=${itp.outputTensorCount}")
             return PoseEstimator(itp)
         }
 
-        /** 仅校验模型能否被 TFLite 打开（下载完成后的完整性检查用），用完即关 */
         fun validateModel(modelPath: String): Boolean {
             val opt = org.tensorflow.lite.Interpreter.Options().setNumThreads(1)
             val itp = org.tensorflow.lite.Interpreter(loadModelFile(modelPath), opt)
@@ -77,41 +98,34 @@ class PoseEstimator private constructor(
     }
 
     /**
-     * 对一张 Bitmap 做推理（RTMPose 是 top-down 模型：整图缩放即可，
-     * 宠物通常占画面主体；识别质量依赖构图，页面已有构图提示）。
-     * @return 最高等效置信度的关键点集；整体低于阈值返回 null（=识别失败）
+     * 对一张 Bitmap 做推理。HRNet 是 top-down：整图缩放即可（宠物通常占主体）。
+     * @return 关键点集；整体低于阈值返回 null（=识别失败，供上层降级）
      */
     fun detect(bitmap: Bitmap): PoseResult? {
-        // 1) 输入尺寸从模型读取（不写死）
-        val inShape = interpreter.getInputTensor(0).shape() // [1,3,256,256] NCHW
-        val inC = inShape[1]; val inH = inShape[2]; val inW = inShape[3]
-        Log.d(TAG, "input tensor shape=${inShape.contentToString()} -> ${inW}x$inH x$inC")
-
-        // 2) 预处理：中心方裁剪 + 缩放 + mmpose mean/std + NCHW
+        val inShape = interpreter.getInputTensor(0).shape() // [1,3,H,W]
+        val inH = inShape[2]; val inW = inShape[3]
         val input = preprocess(bitmap, inW, inH)
 
-        // 3) 推理：两个输出张量 [1,17,512]（输出缓冲带 batch 维，与张量形状严格一致）
         val outCount = interpreter.outputTensorCount
         val outShapes = Array(outCount) { interpreter.getOutputTensor(it).shape() }
+        // 输出：热力图 [1,K,oH,oW]；若双输出，第二为 offset [1,K*2,oH,oW]
         val outputs = Array(outCount) { i ->
             val s = outShapes[i]
-            // [1, K, bins] —— 三维数组与张量形状逐维一致
             Array(s[0]) { Array(s[1]) { FloatArray(s[2]) } }
         }
         val outputsMap = HashMap<Int, Any>()
         for (i in outputs.indices) outputsMap[i] = outputs[i]
         interpreter.runForMultipleInputsOutputs(arrayOf(input), outputsMap)
-        // 去掉 batch 维后再解析
-        val simccX = outputs[0][0]   // [K, bins]
-        val simccY = outputs[1][0]   // [K, bins]
 
-        // 4) SimCC 解析：argmax / 2 → 256 空间坐标，再反算原图归一化
-        return parseSimCC(simccX, simccY, bitmap.width, bitmap.height, inW, inH)
+        val heat = outputs[0][0]           // [K, oW, oW]  (oH==oW)
+        val hasOffset = outCount >= 2
+        val offset = if (hasOffset) outputs[1][0] else null // [K*2, oW, oW]
+
+        return parseHeatmaps(heat, offset, bitmap.width, bitmap.height, inW, inH)
     }
 
-    /** 中心方裁剪 → 256×256 → RGB float32 NCHW，mmpose mean/std 归一化 */
+    /** 中心方裁剪 → resize → ImageNet 归一化 → NCHW float32 */
     private fun preprocess(src: Bitmap, dstW: Int, dstH: Int): ByteBuffer {
-        // 中心方裁剪（top-down 模型标准做法）
         val side = minOf(src.width, src.height)
         val dx = (src.width - side) / 2
         val dy = (src.height - side) / 2
@@ -120,15 +134,14 @@ class PoseEstimator private constructor(
 
         val px = IntArray(dstW * dstH)
         scaled.getPixels(px, 0, dstW, 0, 0, dstW, dstH)
-        // NCHW：三个通道平面分开写
-        val buf = ByteBuffer.allocateDirect(inChCap(dstW, dstH))
-            .order(ByteOrder.nativeOrder())
         val plane = dstW * dstH
+        val buf = ByteBuffer.allocateDirect(plane * 3 * 4).order(ByteOrder.nativeOrder())
         val r = FloatArray(plane); val g = FloatArray(plane); val b = FloatArray(plane)
         for (i in px.indices) {
-            r[i] = (((px[i] shr 16) and 0xFF).toFloat() - MEAN[0]) / STD[0]
-            g[i] = (((px[i] shr 8) and 0xFF).toFloat() - MEAN[1]) / STD[1]
-            b[i] = ((px[i] and 0xFF).toFloat() - MEAN[2]) / STD[2]
+            val v = px[i]
+            r[i] = (((v shr 16) and 0xFF).toFloat() / SCALE_0_1 - MEAN[0]) / STD[0]
+            g[i] = (((v shr 8) and 0xFF).toFloat() / SCALE_0_1 - MEAN[1]) / STD[1]
+            b[i] = ((v and 0xFF).toFloat() / SCALE_0_1 - MEAN[2]) / STD[2]
         }
         for (i in 0 until plane) buf.putFloat(r[i])
         for (i in 0 until plane) buf.putFloat(g[i])
@@ -137,68 +150,62 @@ class PoseEstimator private constructor(
         return buf
     }
 
-    private fun inChCap(w: Int, h: Int): Int = w * h * 3 * 4
-
     /**
-     * SimCC 解析：每个关键点在 x/y 两条 1D 分布上各取 argmax。
-     * 坐标 = argmax / 2（bins=512 → 256 空间），再除以模型输入尺寸 → 0-1 归一化。
-     * 等效置信度 = (top1 - top2) / top1 的归一化锐度 × 峰值占比，双条件低于 0.5 判无效。
+     * 热力图解析：每个关键点在 oH×oW 平面取 argmax → 1/4 像素精修 → 归一到原图 0-1。
+     * 若 offset 存在：x += offset[k]/oH，y += offset[k+K]/oW（归一化偏移）。
+     * 置信度 = 热点峰值（0-1）。无效点（<阈值）坐标保留但 conf=0。
      */
-    private fun parseSimCC(
-        simccX: Array<FloatArray>, simccY: Array<FloatArray>,
+    private fun parseHeatmaps(
+        heat: Array<FloatArray>, offset: Array<FloatArray>?,
         origW: Int, origH: Int, inW: Int, inH: Int
     ): PoseResult? {
-        val k = minOf(simccX.size, simccY.size)
-        if (k == 0) { Log.w(TAG, "empty simcc output"); return null }
-        val bins = simccX[0].size
+        val k = heat.size
+        if (k == 0) { Log.w(TAG, "empty heatmap output"); return null }
+        val res = heat[0].size // oH == oW（正方形输出）
 
-        // SimCC 的 logits 分布平坦（实测 top1≈0.92，top5 几乎并列），
-        // 「峰锐度」无区分度。改用「峰值响应占比」：每个关键点的 (top1x+top1y)/2
-        // 除以全图最大峰值响应，得到 0-1 的相对强度作为等效置信度。
-        var globalMax = 1e-6f
-        val peakX = FloatArray(k); val peakY = FloatArray(k)
-        for (i in 0 until k) {
-            for (b in 0 until bins) {
-                if (simccX[i][b] > peakX[i]) peakX[i] = simccX[i][b]
-                if (simccY[i][b] > peakY[i]) peakY[i] = simccY[i][b]
-            }
-            val m = maxOf(peakX[i], peakY[i])
-            if (m > globalMax) globalMax = m
-        }
-
-        val kpts = FloatArray(k * 3)
+        val kpts = FloatArray(K * 3)
         var bestConf = 0f
         var minX = 1f; var minY = 1f; var maxX = 0f; var maxY = 0f
         var valid = 0
-
         for (i in 0 until k) {
-            var top1x = 0; for (b in 1 until bins) if (simccX[i][b] > simccX[i][top1x]) top1x = b
-            var top1y = 0; for (b in 1 until bins) if (simccY[i][b] > simccY[i][top1y]) top1y = b
-            // 等效置信度：峰值响应 / 全图最大响应（相对强度，0-1）
-            val conf = ((peakX[i] + peakY[i]) / 2f / globalMax).coerceIn(0f, 1f)
-
-            val kx = top1x / 2f / inW   // bins=512 → 256 空间 → 归一化
-            val ky = top1y / 2f / inH
+            var topY = 0; var topX = 0; var peak = -1f
+            for (y in 0 until res) {
+                for (x in 0 until res) {
+                    val v = heat[i][y * res + x]
+                    if (v > peak) { peak = v; topX = x; topY = y }
+                }
+            }
+            val conf = peak.coerceIn(0f, 1f)
+            // 1/4 像素精修（基于峰值邻域重心，无 offset 时）
+            var fx = topX.toFloat(); var fy = topY.toFloat()
+            if (offset != null && offset.size >= 2 * k) {
+                fx += offset[i][topY * res + topX]      // x 偏移（已归一化到 /res）
+                fy += offset[i + k][topY * res + topX]
+            } else {
+                // 简单二阶差分精修
+                val xm = if (topX > 0) heat[i][topY * res + topX - 1] else peak
+                val xp = if (topX < res - 1) heat[i][topY * res + topX + 1] else peak
+                val ym = if (topY > 0) heat[i][(topY - 1) * res + topX] else peak
+                val yp = if (topY < res - 1) heat[i][(topY + 1) * res + topX] else peak
+                fx += 0.25f * (if (peak > 0f) (xp - xm) / (peak * 2f) else 0f)
+                fy += 0.25f * (if (peak > 0f) (yp - ym) / (peak * 2f) else 0f)
+            }
+            val kx = (fx / res).coerceIn(0f, 1f)
+            val ky = (fy / res).coerceIn(0f, 1f)
             val eff = if (conf < CONF_THRESHOLD) 0f else conf
-            kpts[i * 3] = kx.coerceIn(0f, 1f)
-            kpts[i * 3 + 1] = ky.coerceIn(0f, 1f)
-            kpts[i * 3 + 2] = eff
+            kpts[i * 3] = kx; kpts[i * 3 + 1] = ky; kpts[i * 3 + 2] = eff
             if (eff > 0f) {
-                valid++
-                if (bestConf < eff) bestConf = eff
-                minX = minOf(minX, kpts[i * 3]); maxX = maxOf(maxX, kpts[i * 3])
-                minY = minOf(minY, kpts[i * 3 + 1]); maxY = maxOf(maxY, kpts[i * 3 + 1])
+                valid++; if (bestConf < eff) bestConf = eff
+                minX = minOf(minX, kx); maxX = maxOf(maxX, kx)
+                minY = minOf(minY, ky); maxY = maxOf(maxY, ky)
             }
         }
-        Log.d(TAG, "parse simcc: kpts=$k valid=$valid bestConf=%.3f".format(bestConf))
-        if (valid < 6 || bestConf < CONF_THRESHOLD) {
+        Log.d(TAG, "parse heatmaps: kpts=$k valid=$valid bestConf=%.3f".format(bestConf))
+        // 至少 8 个有效点且最高置信度达标，否则判失败
+        if (valid < 8 || bestConf < CONF_THRESHOLD) {
             Log.i(TAG, "no pet above threshold: valid=$valid best=$bestConf")
             return null
         }
-        return PoseResult(
-            bestConf,
-            floatArrayOf(minX, minY, maxX, maxY),
-            kpts
-        )
+        return PoseResult(bestConf, floatArrayOf(minX, minY, maxX, maxY), kpts)
     }
 }

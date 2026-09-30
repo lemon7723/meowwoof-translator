@@ -24,6 +24,7 @@ class _ProfilePageState extends State<ProfilePage> {
   late final TextEditingController _nameCtl =
       TextEditingController(text: widget.pet.name);
   LauncherSettings _settings = LauncherSettings();
+  AppSettings _appSettings = AppSettings();
 
   @override
   void initState() {
@@ -31,6 +32,15 @@ class _ProfilePageState extends State<ProfilePage> {
     LauncherStore.load().then((s) {
       if (mounted) setState(() => _settings = s);
     });
+    ProfileStore.loadSettings().then((s) {
+      if (mounted) setState(() => _appSettings = s);
+    });
+  }
+
+  Future<void> _togglePosture(bool on) async {
+    _appSettings = _appSettings.copyWith(postureEnabled: on);
+    await ProfileStore.saveSettings(_appSettings);
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveLauncher() async {
@@ -140,6 +150,36 @@ class _ProfilePageState extends State<ProfilePage> {
               final u = widget.onUpdate;
               if (u != null) u(widget.pet.copyWith(species: s.first));
             },
+          ),
+          const SizedBox(height: 20),
+
+          // ---- 体态识别总开关（需求 6：任何机型可手动开/关）----
+          Card(
+            color: Colors.grey.shade50,
+            elevation: 0,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('体态识别（Pet Mood Capture）',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  const SizedBox(height: 4),
+                  const Text('关闭后 Pet Mood Capture 仅保留音频功能，不运行体态模型',
+                      style: TextStyle(fontSize: 11, color: Colors.black38)),
+                  const SizedBox(height: 4),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('启用体态识别'),
+                    value: _appSettings.postureEnabled,
+                    onChanged: _togglePosture,
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 20),
 

@@ -83,9 +83,48 @@ class PetProfile {
       );
 }
 
+/// 全局设置（与宠物资料分离，跨宠物生效）。
+/// v1.6.0：体态识别总开关、设备分级弹窗"不再提示"、老旧机型强制开启标记。
+class AppSettings {
+  /// 体态识别总开关（任何机型可在设置页手动开/关）。默认开。
+  bool postureEnabled;
+
+  /// 是否已确认过设备分级弹窗（勾选"不再提示"后置 true，后续进页不再弹）。
+  bool deviceTierAcked;
+
+  /// 用户在老旧机型上手动强制开启体态识别（Not Recommended）。
+  bool forcePosture;
+
+  /// 上次检测到的设备分级结果缓存（'recommended'|'minimum'|'legacy'|'unknown'）。
+  String? deviceTier;
+
+  AppSettings({
+    this.postureEnabled = true,
+    this.deviceTierAcked = false,
+    this.forcePosture = false,
+    this.deviceTier,
+  });
+
+  Map<String, Object?> toMap() => {
+        'postureEnabled': postureEnabled,
+        'deviceTierAcked': deviceTierAcked,
+        'forcePosture': forcePosture,
+        'deviceTier': deviceTier,
+      };
+
+  static AppSettings fromMap(Map<Object?, Object?> m) => AppSettings(
+        postureEnabled: (m['postureEnabled'] as bool?) ?? true,
+        deviceTierAcked: (m['deviceTierAcked'] as bool?) ?? false,
+        forcePosture: (m['forcePosture'] as bool?) ?? false,
+        deviceTier: m['deviceTier'] as String?,
+      );
+}
+
 class ProfileStore {
   static const _key = 'pet_profile_v1';
+  static const _settingsKey = 'app_settings_v1';
   static PetProfile? _cache;
+  static AppSettings? _settingsCache;
 
   static Future<PetProfile> load() async {
     if (_cache != null) return _cache!;
@@ -111,6 +150,32 @@ class ProfileStore {
   }
 
   /// 拷贝头像到应用文档目录（相册临时文件可能被系统回收）
+  /// v1.6.0：读取全局设置（带内存缓存）
+  static Future<AppSettings> loadSettings() async {
+    if (_settingsCache != null) return _settingsCache!;
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString(_settingsKey);
+    if (raw == null || raw.isEmpty) {
+      _settingsCache = AppSettings();
+      return _settingsCache!;
+    }
+    try {
+      final obj = jsonDecode(raw);
+      _settingsCache =
+          AppSettings.fromMap(obj is Map ? obj.cast<Object?, Object?>() : {});
+    } catch (_) {
+      _settingsCache = AppSettings();
+    }
+    return _settingsCache!;
+  }
+
+  /// v1.6.0：保存全局设置
+  static Future<void> saveSettings(AppSettings s) async {
+    _settingsCache = s;
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_settingsKey, jsonEncode(s.toMap()));
+  }
+
   static Future<String?> importPhoto(String srcPath) async {
     try {
       final docs = await getApplicationDocumentsDirectory();

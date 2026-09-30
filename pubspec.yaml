@@ -1,7 +1,7 @@
 ﻿name: meowwoof_translator
-description: "宠了么 1.0.0：离线人声识别（Vosk 中文小模型）→ 意图匹配 → 播放猫语/狗语叫声。10 个预设叫声（猫狗两套，带用途说明）、录宠物声音做音高分析（音色匹配）、拍照设宠物头像。纯离线，无网络权限。"
+description: "宠了么 1.6.0：离线猫狗体态情绪识别（SuperAnimal HRNet-w32 INT8，24 关键点）+ 音频情绪融合；音画同步录像（边录边叫）+ 多平台一键分享。纯离线，模型按需远端下载。"
 publish_to: 'none'
-version: 1.5.9+14
+version: 1.6.0+15
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -9,14 +9,22 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # 拍照 / 相册选头像
+  # 拍照 / 相册选头像、选图识别（原有，保留）
   image_picker: ^1.1.2
-  # 宠物资料持久化
+  # 宠物资料持久化（原有，保留）
   shared_preferences: ^2.3.2
-  # 头像文件落到应用文档目录
+  # 头像文件落到应用文档目录（原有，保留）
   path_provider: ^2.1.5
-  # 注意：语音识别（Vosk）、录音与音高分析、叫声播放全部在 Android 原生层
-  # 实现（MainActivity.kt），不引入任何联网 SDK，不申请网络权限。
+  # v1.6.0：设备分级检测（读取芯片/内存，用于三档机型弹窗与预期管理）
+  device_info_plus: ^10.1.2
+  # v1.6.0：相机/麦克风权限统一申请（进入 Pet Mood Capture 一次性申请）
+  permission_handler: ^11.3.1
+  # v1.6.0：系统分享兜底（System Share 唤起原生分享面板）
+  share_plus: ^7.2.2
+  # 注意：语音识别（Vosk）、录音与音高分析、叫声播放、HRNet 体态推理、
+  # 实时相机取帧、音画同步录像全部在 Android 原生层实现（MainActivity.kt /
+  # pose/* / voice/*），Dart 侧只做桥接与 UI。不引入任何联网 SDK，
+  # 仅体态模型下载使用 INTERNET 权限。
 
 dev_dependencies:
   flutter_test:
